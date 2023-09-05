@@ -8,6 +8,8 @@ from utils import general
 from networks import networks
 from objectives import ncc
 from objectives import regularizers
+import matplotlib.pyplot as plt
+import numpy as np
 
 
 class ImplicitRegistrator:
@@ -347,6 +349,21 @@ class ImplicitRegistrator:
                 coordinate_tensor, output_rel, batch_size=self.batch_size
             )
 
+        print(f"epoch: {epoch}, loss: {loss}")
+        torch.save(self.network.state_dict(), self.save_folder + '/network.pt')
+        if epoch % 100 == 0:
+            with torch.no_grad():
+                output = []
+                for i in range(0, self.possible_coordinate_tensor.shape[0], self.batch_size):
+                    output.append(self.network(self.possible_coordinate_tensor[i:i + self.batch_size]))
+                output = torch.cat(output)
+                coord_temp = torch.add(output, self.possible_coordinate_tensor)
+                transformed_image = self.transform_no_add(coord_temp)
+                transformed_image = transformed_image.reshape(self.moving_image.shape)
+                plt.imshow(np.concatenate((self.moving_image.cpu().numpy()[:, 140, :],
+                                   self.fixed_image.cpu().numpy()[:, 140, :],
+                                   transformed_image.cpu().numpy()[:, 140, :])))
+                plt.savefig(self.save_folder + f'/epoch_{epoch + 1}.png', bbox_inches='tight')
         # Perform the backpropagation and update the parameters accordingly
 
         for param in self.network.parameters():

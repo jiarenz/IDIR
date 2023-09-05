@@ -81,31 +81,32 @@ def load_image_DIRLab(variation=1, folder=r"D:\Data\DIRLAB\Case"):
     # Images
     dtype = np.dtype(np.int16)
 
-    with open(folder + r"Images\case" + str(variation) + "_T00_s.img", "rb") as f:
+    with open(folder + "Images/case" + str(variation) + "_T00_s.img", "rb") as f:
         data = np.fromfile(f, dtype)
     image_insp = data.reshape(shape)
 
-    with open(folder + r"Images\case" + str(variation) + "_T50_s.img", "rb") as f:
+    with open(folder + "Images/case" + str(variation) + "_T50_s.img", "rb") as f:
         data = np.fromfile(f, dtype)
     image_exp = data.reshape(shape)
 
-    imgsitk_in = sitk.ReadImage(folder + r"Masks\case" + str(variation) + "_T00_s.mhd")
+    # imgsitk_in = sitk.ReadImage(folder + r"Masks\case" + str(variation) + "_T00_s.mhd")
 
-    mask = np.clip(sitk.GetArrayFromImage(imgsitk_in), 0, 1)
+    # mask = np.clip(sitk.GetArrayFromImage(imgsitk_in), 0, 1)
+    mask = np.ones(image_insp.shape)
 
     image_insp = torch.FloatTensor(image_insp)
     image_exp = torch.FloatTensor(image_exp)
 
     # Landmarks
     with open(
-        folder + r"ExtremePhases\Case" + str(variation) + "_300_T00_xyz.txt"
+        folder + "ExtremePhases/Case" + str(variation) + "_300_T00_xyz.txt"
     ) as f:
         landmarks_insp = np.array(
             [list(map(int, line[:-1].split("\t")[:3])) for line in f.readlines()]
         )
 
     with open(
-        folder + r"ExtremePhases\Case" + str(variation) + "_300_T50_xyz.txt"
+        folder + "ExtremePhases/Case" + str(variation) + "_300_T50_xyz.txt"
     ) as f:
         landmarks_exp = np.array(
             [list(map(int, line[:-1].split("\t")[:3])) for line in f.readlines()]
@@ -158,6 +159,15 @@ def fast_trilinear_interpolation(input_array, x_indices, y_indices, z_indices):
         + input_array[x1, y1, z1] * x * y * z
     )
     return output
+
+
+def rotate_coordinates(theta, coordinate_tensor):
+    new_coordinate_tensor = coordinate_tensor.clone()
+    y_coordinate = coordinate_tensor[:, 1] * torch.cos(theta) - coordinate_tensor[:, 2] * torch.sin(theta)
+    z_coordinate = coordinate_tensor[:, 1] * torch.sin(theta) + coordinate_tensor[:, 2] * torch.cos(theta)
+    new_coordinate_tensor[:, 1] = y_coordinate
+    new_coordinate_tensor[:, 2] = z_coordinate
+    return new_coordinate_tensor
 
 
 def count_parameters(model):

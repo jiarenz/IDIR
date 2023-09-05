@@ -1,10 +1,13 @@
 from utils import general
 from models import models
+import matplotlib
+matplotlib.use('TkAgg')
+import matplotlib.pyplot as plt
 
-data_dir = "D:\Data\DIRLAB\DIRLAB_clean"
-out_dir = "D:\Data\DIRLAB\outtest"
+data_dir = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/DIRLAB/DIRLAB_clean"
+out_dir = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/DIRLAB/outtest"
 
-case_id = 8
+case_id = 1
 
 (
     img_insp,
@@ -13,10 +16,10 @@ case_id = 8
     landmarks_exp,
     mask_exp,
     voxel_size,
-) = general.load_image_DIRLab(case_id, "{}\Case".format(data_dir))
+) = general.load_image_DIRLab(case_id, f"{data_dir}/Case")
 
 kwargs = {}
-kwargs["verbose"] = False
+kwargs["verbose"] = True
 kwargs["hyper_regularization"] = False
 kwargs["jacobian_regularization"] = False
 kwargs["bending_regularization"] = True
