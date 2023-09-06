@@ -10,6 +10,9 @@ from objectives import ncc
 from objectives import regularizers
 import matplotlib.pyplot as plt
 import numpy as np
+import wandb
+from skimage.metrics import structural_similarity as ssim
+from torch.utils.checkpoint import checkpoint
 
 
 class ImplicitRegistrator:
@@ -57,6 +60,7 @@ class ImplicitRegistrator:
         )
         self.gpu = kwargs["gpu"] if "gpu" in kwargs else self.args["gpu"]
         self.lr = kwargs["lr"] if "lr" in kwargs else self.args["lr"]
+        self.finetune_lr = kwargs["finetune_lr"] if "lr" in kwargs else self.args["finetune_lr"]
         self.momentum = (
             kwargs["momentum"] if "momentum" in kwargs else self.args["momentum"]
         )
@@ -104,6 +108,9 @@ class ImplicitRegistrator:
         self.network_from_file = (
             kwargs["network"] if "network" in kwargs else self.args["network"]
         )
+        self.checkpoint = (
+            kwargs["checkpoint"] if "checkpoint" in kwargs else self.args["checkpoint"]
+        )
         self.network_type = (
             kwargs["network_type"]
             if "network_type" in kwargs
@@ -125,6 +132,9 @@ class ImplicitRegistrator:
             if self.gpu:
                 self.network.cuda()
 
+        if self.checkpoint is not None:
+            self.network.load_state_dict(torch.load(self.checkpoint, map_location='cpu'))
+
         # Choose the optimizer
         if self.optimizer_arg.lower() == "sgd":
             self.optimizer = optim.SGD(
@@ -132,7 +142,10 @@ class ImplicitRegistrator:
             )
 
         elif self.optimizer_arg.lower() == "adam":
-            self.optimizer = optim.Adam(self.network.parameters(), lr=self.lr)
+            if self.checkpoint is not None:
+                self.optimizer = optim.Adam(self.network.parameters(), lr=self.finetune_lr)
+            else:
+                self.optimizer = optim.Adam(self.network.parameters(), lr=self.lr)
 
         elif self.optimizer_arg.lower() == "adadelta":
             self.optimizer = optim.Adadelta(self.network.parameters(), lr=self.lr)
@@ -225,6 +238,10 @@ class ImplicitRegistrator:
             kwargs["batch_size"] if "batch_size" in kwargs else self.args["batch_size"]
         )
 
+        self.finetune_batch_size = (
+            kwargs["finetune_batch_size"] if "finetune_batch_size" in kwargs else self.args["finetune_batch_size"]
+        )
+
         # Initialization
         self.moving_image = moving_image
         self.fixed_image = fixed_image
@@ -260,7 +277,9 @@ class ImplicitRegistrator:
         self.args["method"] = 1
 
         self.args["lr"] = 0.00001
+        self.args["finetune_lr"] = 1e-5
         self.args["batch_size"] = 10000
+        self.args["finetune_batch_size"] = 50000
         self.args["layers"] = [3, 256, 256, 256, 3]
         self.args["velocity_steps"] = 1
 
@@ -281,6 +300,7 @@ class ImplicitRegistrator:
         self.args["image_shape"] = (200, 200)
 
         self.args["network"] = None
+        self.args["checkpoint"] = None
 
         self.args["epochs"] = 2500
         self.args["log_interval"] = self.args["epochs"] // 4
@@ -300,33 +320,105 @@ class ImplicitRegistrator:
 
         self.args["seed"] = 1
 
-    def training_iteration(self, epoch):
+    def training_iteration(self, epoch, mode='train'):
         """Perform one iteration of training."""
 
         # Reset the gradient
         self.network.train()
 
-        loss = 0
-        indices = torch.randperm(
-            self.possible_coordinate_tensor.shape[0], device="cuda"
-        )[: self.batch_size]
-        coordinate_tensor = self.possible_coordinate_tensor[indices, :]
-        coordinate_tensor = coordinate_tensor.requires_grad_(True)
+        if mode == 'train':
+            loss = 0
+            indices = torch.randperm(
+                self.possible_coordinate_tensor.shape[0], device="cuda"
+            )[: self.batch_size]
+            coordinate_tensor = self.possible_coordinate_tensor[indices, :]
+            coordinate_tensor = coordinate_tensor.requires_grad_(True)
 
-        output = self.network(coordinate_tensor)
-        coord_temp = torch.add(output, coordinate_tensor)
-        output = coord_temp
+            output = self.network(coordinate_tensor)
+            coord_temp = torch.add(output, coordinate_tensor)
+            output = coord_temp
 
-        transformed_image = self.transform_no_add(coord_temp)
-        fixed_image = general.fast_trilinear_interpolation(
-            self.fixed_image,
-            coordinate_tensor[:, 0],
-            coordinate_tensor[:, 1],
-            coordinate_tensor[:, 2],
-        )
+            transformed_image = self.transform_no_add(coord_temp)
+            fixed_image = general.fast_trilinear_interpolation(
+                self.fixed_image,
+                coordinate_tensor[:, 0],
+                coordinate_tensor[:, 1],
+                coordinate_tensor[:, 2],
+            )
 
-        # Compute the loss
-        loss += self.criterion(transformed_image, fixed_image)
+            # Compute the loss
+            loss += self.criterion(transformed_image, fixed_image)
+        elif mode == 'finetune':
+            nx, ny, nz = self.fixed_image.shape
+            loss = 0
+            coordinate_tensor = self.possible_coordinate_tensor
+            coordinate_tensor = coordinate_tensor.requires_grad_(True)
+            # coordinate_tensor = coordinate_tensor.reshape(self.fixed_image.shape + (3,))  # (nx, ny, nz, 3)
+            # coordinate_tensor = coordinate_tensor.permute(0, 2, 1, 3).view(-1, ny, 3)  # (nx * nz, ny, 3)
+            # indices = torch.randperm(coordinate_tensor.shape[0], device="cuda")[:self.batch_size]
+            # coordinate_tensor = coordinate_tensor[indices, :, :].view(-1, 3)  # (n_lines * ny, 3)
+            # theta = torch.tensor(torch.pi / 2).to(self.fixed_image)
+            # coordinate_tensor = general.rotate_coordinates(theta, coordinate_tensor)
+            output = []
+            for i in range(0, coordinate_tensor.shape[0], self.finetune_batch_size):
+                output.append(checkpoint(self.network, coordinate_tensor[i:i + self.finetune_batch_size]))
+            output = torch.cat(output)  # (nx*ny*nz, 3)
+            # indices = torch.randperm(
+            #     self.possible_coordinate_tensor.shape[0], device="cuda"
+            # )[: self.batch_size]
+            # coordinate_tensor = self.possible_coordinate_tensor[indices, :]
+            # coordinate_tensor = coordinate_tensor.requires_grad_(True)
+            # output = self.network(coordinate_tensor)
+            coord_temp = torch.add(output, coordinate_tensor)
+            output = coord_temp
+            # torch.cuda.empty_cache()
+            transformed_image = self.transform_no_add(coord_temp)   # (nx*ny*nz)
+            # fixed_image = general.fast_trilinear_interpolation(
+            #     self.fixed_image,
+            #     coordinate_tensor[:, 0],
+            #     coordinate_tensor[:, 1],
+            #     coordinate_tensor[:, 2],
+            # )
+            transformed_image = transformed_image.reshape(self.moving_image.shape)
+            # fixed_image = fixed_image.reshape(self.moving_image.shape)
+            theta = torch.tensor(torch.pi / 4).to(transformed_image)
+            rotated_possible_coordinates = general.rotate_coordinates(theta, self.possible_coordinate_tensor)
+            rotated_fixed_image = general.fast_trilinear_interpolation(
+                self.fixed_image,
+                rotated_possible_coordinates[:, 0],
+                rotated_possible_coordinates[:, 1],
+                rotated_possible_coordinates[:, 2],
+            )
+            rotated_transformed_image = general.fast_trilinear_interpolation(
+                transformed_image,
+                rotated_possible_coordinates[:, 0],
+                rotated_possible_coordinates[:, 1],
+                rotated_possible_coordinates[:, 2],
+            )
+            # rotated_fixed_image = rotated_fixed_image.reshape(self.moving_image.shape)
+            # rotated_transformed_image = rotated_transformed_image.reshape(self.moving_image.shape)
+            rotated_fixed_image = torch.mean(rotated_fixed_image.reshape(self.moving_image.shape),
+                                             dim=1, keepdim=True)  # (nx, 1, nz)
+            rotated_transformed_image = torch.mean(rotated_transformed_image.reshape(self.moving_image.shape),
+                                             dim=1, keepdim=True)  # (nx, 1, nz)
+            # reverse_rotated_possible_coordinates = general.rotate_coordinates(-theta, self.possible_coordinate_tensor)
+            # rotated_fixed_image = general.fast_trilinear_interpolation(
+            #     rotated_fixed_image,
+            #     reverse_rotated_possible_coordinates[:, 0],
+            #     reverse_rotated_possible_coordinates[:, 1],
+            #     reverse_rotated_possible_coordinates[:, 2],
+            # )
+            # rotated_fixed_image = rotated_fixed_image.reshape(self.moving_image.shape)
+            # fixed_image = general.fast_trilinear_interpolation(
+            #     rotated_fixed_image,
+            #     coordinate_tensor[:, 0],
+            #     coordinate_tensor[:, 1],
+            #     coordinate_tensor[:, 2],
+            # )
+            transformed_image = rotated_transformed_image.view(-1)
+            fixed_image = rotated_fixed_image.view(-1)
+            # Compute the loss
+            loss += self.criterion(transformed_image, fixed_image)
 
         # Store the value of the data loss
         if self.verbose:
@@ -365,7 +457,10 @@ class ImplicitRegistrator:
                                    transformed_image.cpu().numpy()[:, 140, :])))
                 plt.savefig(self.save_folder + f'/epoch_{epoch + 1}.png', bbox_inches='tight')
         # Perform the backpropagation and update the parameters accordingly
-
+                wandb.log({"MSE": torch.nn.functional.mse_loss(self.fixed_image, transformed_image),
+                           "SSIM": ssim(transformed_image.cpu().numpy(), self.fixed_image.cpu().numpy(),
+                  data_range=transformed_image.cpu().numpy().max() - transformed_image.cpu().numpy().min()),
+                           "loss": loss})
         for param in self.network.parameters():
             param.grad = None
         loss.backward()
@@ -411,9 +506,9 @@ class ImplicitRegistrator:
             transformation[:, 2],
         )
 
-    def fit(self, epochs=None, red_blue=False):
+    def fit(self, epochs=None, red_blue=False, mode='train'):
         """Train the network."""
-
+        scaler = torch.cuda.amp.GradScaler()
         # Determine epochs
         if epochs is None:
             epochs = self.epochs
@@ -428,4 +523,10 @@ class ImplicitRegistrator:
 
         # Perform training iterations
         for i in tqdm.tqdm(range(epochs)):
-            self.training_iteration(i)
+            self.training_iteration(i, mode=mode)
+
+
+    # def projection_mse(self, moving_image, fixed_image):
+    #     """Train the network."""
+    #     for angle in self.projection_angles:
+

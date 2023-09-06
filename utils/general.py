@@ -2,6 +2,8 @@ import numpy as np
 import os
 import torch
 import SimpleITK as sitk
+import os
+import nibabel as nib
 
 
 def compute_landmark_accuracy(landmarks_pred, landmarks_gt, voxel_size):
@@ -43,7 +45,7 @@ def compute_landmarks(network, landmarks_pre, image_size):
     return landmarks_pre + delta, delta
 
 
-def load_image_DIRLab(variation=1, folder=r"D:\Data\DIRLAB\Case"):
+def load_image_DIRLab(variation=1, folder=r"D:\Data\DIRLAB\Case", mode='train'):
     # Size of data, per image pair
     image_sizes = [
         0,
@@ -81,11 +83,17 @@ def load_image_DIRLab(variation=1, folder=r"D:\Data\DIRLAB\Case"):
     # Images
     dtype = np.dtype(np.int16)
 
-    with open(folder + "Images/case" + str(variation) + "_T00_s.img", "rb") as f:
+    if mode == "train":
+        insp_phase = "00"
+        exp_phase = "20"
+    elif mode == "finetune":
+        insp_phase = "40"
+        exp_phase = "60"
+    with open(folder + "Images/case" + str(variation) + f"_T{insp_phase}_s.img", "rb") as f:
         data = np.fromfile(f, dtype)
     image_insp = data.reshape(shape)
 
-    with open(folder + "Images/case" + str(variation) + "_T50_s.img", "rb") as f:
+    with open(folder + "Images/case" + str(variation) + f"_T{exp_phase}_s.img", "rb") as f:
         data = np.fromfile(f, dtype)
     image_exp = data.reshape(shape)
 
@@ -122,6 +130,60 @@ def load_image_DIRLab(variation=1, folder=r"D:\Data\DIRLAB\Case"):
         landmarks_exp,
         mask,
         voxel_sizes[variation],
+    )
+
+
+def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_patients", mode='train'):
+    patients = ["ARENDS_WILLIAM_100448365_2017NOV29_131132_EOVIST",
+                "MURTON_ROBERT_18051141_2018MAY31_113605_EOVIST",
+                "BLAKE_ROBERT_035742839_2021APR14_134316_EOVIST",
+                "HARDIN_LINDA_101599027_2022OCT28_125913_EOVIST",
+                "TRUELOVE_CHARLES_101461481_2022JAN07_130825_EOVIST",
+                "GIETZEN_ANDREW_101410533_2021OCT26_114742_EOVIST",
+                "WILSON_PHILIP_040866620_2020SEP16_093357_EOVIST",
+                "DEAKIN_SHIRLEY_100684937_2018APR13_115437_EOVIST",
+                "MILLER_CAROL_100512736_2017JUN16_152234_MULTIHANCE",
+                "HEINROTH_ROBERT_100583154_2018FEB21_094222_EOVIST"]
+    patient = patients[variation]
+    folder = folder + f"/{patient}" + "/reconstruction/Tornado5_SMIN90_SMAX180_STRIDE90_DMC"
+    data = {}
+    first_phase_time = 10000
+    temp_resolution = 90 * 150 / 1000
+    for file in os.listdir(folder):
+        if file.endswith(".img") and file.startswith("Sequence"):
+            phase_time = int(file[-10:-4]) * 150 / 1000
+            img = nib.load(os.path.join(f"{folder}/", file))
+            img_numpy = img.get_fdata().astype(np.float32)
+            data[phase_time] = np.flip(img_numpy, axis=2).transpose(2, 1, 0)  # (i->s, a->p, r->l)
+            if phase_time < first_phase_time:
+                first_phase_time = phase_time
+    voxel_size = [img.affine[2, 2], img.affine[1, 1], img.affine[0, 0]]
+
+    if mode == "train":
+        fixed_phase_time = first_phase_time
+        moving_phase_time = first_phase_time + temp_resolution * 9
+    elif mode == "finetune":
+        fixed_phase_time = first_phase_time + temp_resolution * 18
+        moving_phase_time = first_phase_time + temp_resolution * 27
+
+    fixed_image = data[fixed_phase_time]
+    moving_image = data[moving_phase_time]
+
+    # imgsitk_in = sitk.ReadImage(folder + r"Masks\case" + str(variation) + "_T00_s.mhd")
+
+    # mask = np.clip(sitk.GetArrayFromImage(imgsitk_in), 0, 1)
+    mask = np.ones(fixed_image.shape)
+
+    fixed_image = torch.from_numpy(fixed_image.copy())
+    moving_image = torch.from_numpy(moving_image.copy())
+
+    return (
+        fixed_image,
+        moving_image,
+        None,
+        None,
+        mask,
+        voxel_size,
     )
 
 
