@@ -157,14 +157,15 @@ def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_pa
             data[phase_time] = np.flip(img_numpy, axis=2).transpose(2, 1, 0)  # (i->s, a->p, r->l)
             if phase_time < first_phase_time:
                 first_phase_time = phase_time
+    mid_phase_time = 3680 * 150 / 1000  # 9.2 min
     voxel_size = [img.affine[2, 2], img.affine[1, 1], img.affine[0, 0]]
 
     if mode == "train":
-        fixed_phase_time = first_phase_time
-        moving_phase_time = first_phase_time + temp_resolution * 9
+        fixed_phase_time = mid_phase_time + temp_resolution
+        moving_phase_time = mid_phase_time + temp_resolution * 9
     elif mode == "finetune":
-        fixed_phase_time = first_phase_time + temp_resolution * 18
-        moving_phase_time = first_phase_time + temp_resolution * 27
+        fixed_phase_time = mid_phase_time + temp_resolution * 20
+        moving_phase_time = mid_phase_time + temp_resolution * 29
 
     fixed_image = data[fixed_phase_time]
     moving_image = data[moving_phase_time]

@@ -320,7 +320,7 @@ class ImplicitRegistrator:
 
         self.args["seed"] = 1
 
-    def training_iteration(self, epoch, mode='train'):
+    def training_iteration(self, epoch, mode='train', n_proj=None):
         """Perform one iteration of training."""
 
         # Reset the gradient
@@ -381,44 +381,47 @@ class ImplicitRegistrator:
             # )
             transformed_image = transformed_image.reshape(self.moving_image.shape)
             # fixed_image = fixed_image.reshape(self.moving_image.shape)
-            theta = torch.tensor(torch.pi / 4).to(transformed_image)
-            rotated_possible_coordinates = general.rotate_coordinates(theta, self.possible_coordinate_tensor)
-            rotated_fixed_image = general.fast_trilinear_interpolation(
-                self.fixed_image,
-                rotated_possible_coordinates[:, 0],
-                rotated_possible_coordinates[:, 1],
-                rotated_possible_coordinates[:, 2],
-            )
-            rotated_transformed_image = general.fast_trilinear_interpolation(
-                transformed_image,
-                rotated_possible_coordinates[:, 0],
-                rotated_possible_coordinates[:, 1],
-                rotated_possible_coordinates[:, 2],
-            )
-            # rotated_fixed_image = rotated_fixed_image.reshape(self.moving_image.shape)
-            # rotated_transformed_image = rotated_transformed_image.reshape(self.moving_image.shape)
-            rotated_fixed_image = torch.mean(rotated_fixed_image.reshape(self.moving_image.shape),
-                                             dim=1, keepdim=True)  # (nx, 1, nz)
-            rotated_transformed_image = torch.mean(rotated_transformed_image.reshape(self.moving_image.shape),
-                                             dim=1, keepdim=True)  # (nx, 1, nz)
-            # reverse_rotated_possible_coordinates = general.rotate_coordinates(-theta, self.possible_coordinate_tensor)
-            # rotated_fixed_image = general.fast_trilinear_interpolation(
-            #     rotated_fixed_image,
-            #     reverse_rotated_possible_coordinates[:, 0],
-            #     reverse_rotated_possible_coordinates[:, 1],
-            #     reverse_rotated_possible_coordinates[:, 2],
-            # )
-            # rotated_fixed_image = rotated_fixed_image.reshape(self.moving_image.shape)
-            # fixed_image = general.fast_trilinear_interpolation(
-            #     rotated_fixed_image,
-            #     coordinate_tensor[:, 0],
-            #     coordinate_tensor[:, 1],
-            #     coordinate_tensor[:, 2],
-            # )
-            transformed_image = rotated_transformed_image.view(-1)
-            fixed_image = rotated_fixed_image.view(-1)
-            # Compute the loss
-            loss += self.criterion(transformed_image, fixed_image)
+            theta_list = []
+            for i in range(n_proj):
+                theta_list.append(torch.tensor(111.25 / 180 * torch.pi * i).to(transformed_image))
+            for theta in theta_list:
+                rotated_possible_coordinates = general.rotate_coordinates(theta, self.possible_coordinate_tensor)
+                rotated_fixed_image = general.fast_trilinear_interpolation(
+                    self.fixed_image,
+                    rotated_possible_coordinates[:, 0],
+                    rotated_possible_coordinates[:, 1],
+                    rotated_possible_coordinates[:, 2],
+                )
+                rotated_transformed_image = general.fast_trilinear_interpolation(
+                    transformed_image,
+                    rotated_possible_coordinates[:, 0],
+                    rotated_possible_coordinates[:, 1],
+                    rotated_possible_coordinates[:, 2],
+                )
+                # rotated_fixed_image = rotated_fixed_image.reshape(self.moving_image.shape)
+                # rotated_transformed_image = rotated_transformed_image.reshape(self.moving_image.shape)
+                rotated_fixed_image = torch.mean(rotated_fixed_image.reshape(self.moving_image.shape),
+                                                 dim=1, keepdim=True)  # (nx, 1, nz)
+                rotated_transformed_image = torch.mean(rotated_transformed_image.reshape(self.moving_image.shape),
+                                                 dim=1, keepdim=True)  # (nx, 1, nz)
+                # reverse_rotated_possible_coordinates = general.rotate_coordinates(-theta, self.possible_coordinate_tensor)
+                # rotated_fixed_image = general.fast_trilinear_interpolation(
+                #     rotated_fixed_image,
+                #     reverse_rotated_possible_coordinates[:, 0],
+                #     reverse_rotated_possible_coordinates[:, 1],
+                #     reverse_rotated_possible_coordinates[:, 2],
+                # )
+                # rotated_fixed_image = rotated_fixed_image.reshape(self.moving_image.shape)
+                # fixed_image = general.fast_trilinear_interpolation(
+                #     rotated_fixed_image,
+                #     coordinate_tensor[:, 0],
+                #     coordinate_tensor[:, 1],
+                #     coordinate_tensor[:, 2],
+                # )
+                rotated_transformed_image = rotated_transformed_image.view(-1)
+                rotated_fixed_image = rotated_fixed_image.view(-1)
+                # Compute the loss
+                loss += self.criterion(rotated_transformed_image, rotated_fixed_image)
 
         # Store the value of the data loss
         if self.verbose:
@@ -441,9 +444,9 @@ class ImplicitRegistrator:
                 coordinate_tensor, output_rel, batch_size=self.batch_size
             )
 
-        print(f"epoch: {epoch}, loss: {loss}")
+        # print(f"epoch: {epoch}, loss: {loss}")
         torch.save(self.network.state_dict(), self.save_folder + '/network.pt')
-        if epoch % 100 == 0:
+        if (epoch % 100 == 0 and mode == 'train') or (epoch % 10 == 0 and mode == 'finetune'):
             with torch.no_grad():
                 output = []
                 for i in range(0, self.possible_coordinate_tensor.shape[0], self.batch_size):
@@ -452,15 +455,16 @@ class ImplicitRegistrator:
                 coord_temp = torch.add(output, self.possible_coordinate_tensor)
                 transformed_image = self.transform_no_add(coord_temp)
                 transformed_image = transformed_image.reshape(self.moving_image.shape)
-                plt.imshow(np.concatenate((self.moving_image.cpu().numpy()[:, 140, :],
-                                   self.fixed_image.cpu().numpy()[:, 140, :],
-                                   transformed_image.cpu().numpy()[:, 140, :])))
+                plt.imshow(np.concatenate((self.moving_image.cpu().numpy()[:, 110, :],
+                                   self.fixed_image.cpu().numpy()[:, 110, :],
+                                   transformed_image.cpu().numpy()[:, 110, :])), cmap='gray')
                 plt.savefig(self.save_folder + f'/epoch_{epoch + 1}.png', bbox_inches='tight')
         # Perform the backpropagation and update the parameters accordingly
                 wandb.log({"MSE": torch.nn.functional.mse_loss(self.fixed_image, transformed_image),
                            "SSIM": ssim(transformed_image.cpu().numpy(), self.fixed_image.cpu().numpy(),
                   data_range=transformed_image.cpu().numpy().max() - transformed_image.cpu().numpy().min()),
-                           "loss": loss})
+                           "loss": loss,
+                           "epoch": epoch})
         for param in self.network.parameters():
             param.grad = None
         loss.backward()
@@ -506,7 +510,7 @@ class ImplicitRegistrator:
             transformation[:, 2],
         )
 
-    def fit(self, epochs=None, red_blue=False, mode='train'):
+    def fit(self, epochs=None, red_blue=False, mode='train', n_proj=None):
         """Train the network."""
         scaler = torch.cuda.amp.GradScaler()
         # Determine epochs
@@ -523,7 +527,7 @@ class ImplicitRegistrator:
 
         # Perform training iterations
         for i in tqdm.tqdm(range(epochs)):
-            self.training_iteration(i, mode=mode)
+            self.training_iteration(i, mode=mode, n_proj=n_proj)
 
 
     # def projection_mse(self, moving_image, fixed_image):

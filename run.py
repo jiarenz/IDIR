@@ -14,16 +14,25 @@ project_dir = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion"
 parser_main = argparse.ArgumentParser()
 parser_main.add_argument('--dataset', type=str, help='Choose which dataset for training')
 parser_main.add_argument('--case_id', type=int, default=0, help='Choose which case for training')
+parser_main.add_argument('--mode', type=str, default="train", help='Whether to train from scratch or finetune '
+                                                                   'an existing model')
+parser_main.add_argument('--n_proj', type=int, default=1, help='Number of projecitions for finetuning')
 args = parser_main.parse_args()
 
 start_run_at = time.strftime("%Y%m%d_%H%M%S", time.localtime())
 
 if args.dataset == "DIRLAB":
     data_dir = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/DIRLAB/DIRLAB_clean"
-    out_dir = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/DIRLAB/outtest"
+    if args.mode == "train":
+        out_dir = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/DIRLAB/outtest"
+    elif args.mode == "finetune":
+        out_dir = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/DIRLAB/finetuning_output"
 elif args.dataset == "liver_motion":
     data_dir = "/mnt/ibrixfs04-Kspace/motion_patients"
-    out_dir = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/liver_motion/training"
+    if args.mode == "train":
+        out_dir = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/liver_motion/training"
+    elif args.mode == "finetune":
+        out_dir = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/liver_motion/finetuning"
 save_folder = out_dir + '_' + str(args.case_id) + f"_{start_run_at}"
 os.makedirs(save_folder)
 os.makedirs(f"{save_folder}/wandb")
@@ -49,7 +58,7 @@ if args.dataset == "DIRLAB":
         landmarks_exp,
         mask_exp,
         voxel_size,
-    ) = general.load_image_DIRLab(args.case_id, f"{data_dir}/Case", mode='train')
+    ) = general.load_image_DIRLab(args.case_id, f"{data_dir}/Case", mode=args.mode)
 elif args.dataset == "liver_motion":
     (
         img_insp,
@@ -58,7 +67,7 @@ elif args.dataset == "liver_motion":
         landmarks_exp,
         mask_exp,
         voxel_size,
-    ) = general.load_image_liver_motion(args.case_id, f"{data_dir}", mode='train')
+    ) = general.load_image_liver_motion(args.case_id, f"{data_dir}", mode=args.mode)
 
 kwargs = {}
 kwargs["verbose"] = True
@@ -68,9 +77,19 @@ kwargs["bending_regularization"] = True
 kwargs["network_type"] = "SIREN"  # Options are "MLP" and "SIREN"
 kwargs["save_folder"] = save_folder
 kwargs["mask"] = mask_exp
+if args.mode == "finetune":
+    kwargs["checkpoint"] = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/liver_motion/training_1_20230906_162636/network.pt"
+    kwargs["loss_function"] = 'mse'
+    kwargs["hyper_regularization"] = False
+    kwargs["jacobian_regularization"] = False
+    kwargs["bending_regularization"] = False
+    kwargs["epochs"] = 500
 
 ImpReg = models.ImplicitRegistrator(img_exp, img_insp, **kwargs)
-ImpReg.fit()
+if args.mode == "finetune":
+    ImpReg.fit(mode='finetune', n_proj=args.n_proj)
+else:
+    ImpReg.fit()
 # new_landmarks_orig, _ = general.compute_landmarks(
 #     ImpReg.network, landmarks_insp, image_size=img_insp.shape
 # )
