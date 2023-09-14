@@ -469,12 +469,13 @@ class ImplicitRegistrator:
                            self.moving_image.cpu().numpy()[:, 110, :],
                            transformed_image.cpu().numpy()[:, 110, :])),
                            np.concatenate((abs(self.fixed_image.cpu().numpy()[:, 110, :] - self.fixed_image.cpu().numpy()[:, 110, :]),
-                           abs(self.moving_image.cpu().numpy()[:, 110, :] - self.fixed_image.cpu().numpy()[:, 110, :]),
-                           abs(transformed_image.cpu().numpy()[:, 110, :] - self.fixed_image.cpu().numpy()[:, 110, :])))),
+                           abs(self.moving_image.cpu().numpy()[:, 110, :] - self.fixed_image.cpu().numpy()[:, 110, :]) * 10,
+                           abs(transformed_image.cpu().numpy()[:, 110, :] - self.fixed_image.cpu().numpy()[:, 110, :]) * 10))),
                                           axis=1),
                            cmap='gray',
                            vmax=0.1)
                 plt.text(0.05, 0.05, f'epoch {epoch + 1}\n{time_elapsed:.1f}s', fontsize=20)
+                plt.colorbar()
                 plt.axis('off')
                 plt.savefig(self.save_folder + f'/epoch_{epoch + 1}.png', bbox_inches='tight')
                 plt.close()
@@ -492,6 +493,7 @@ class ImplicitRegistrator:
                                 output.cpu().numpy()[:, 110, :, 2]))),
                     axis=1), cmap='seismic', vmax=2, vmin=-2)
                 plt.text(0.05, 0.05, f'epoch {epoch + 1}\n{time_elapsed:.1f}s', fontsize=20)
+                plt.colorbar()
 
                 plt.axis('off')
                 plt.savefig(self.save_folder + f'/dvf_epoch_{epoch + 1}.png', bbox_inches='tight')
@@ -512,7 +514,7 @@ class ImplicitRegistrator:
                 NeRP_transformed_voi[NeRP_transformed_voi < 0.5] = 0
                 hd95 = medpy.metric.binary.hd95(NeRP_transformed_voi.cpu().numpy(),
                                                 ground_truth_transformed_voi.cpu().numpy(),
-                                                voxelspacing=self.voxel_size)
+                                                voxelspacing=self.voxel_size, connectivity=3)
 
                 plt.figure()
                 plt.imshow(np.concatenate((ground_truth_transformed_voi.cpu().numpy()[:, 110, :],
@@ -520,6 +522,7 @@ class ImplicitRegistrator:
                                           NeRP_transformed_voi.cpu().numpy()[:, 110, :] - ground_truth_transformed_voi.cpu().numpy()[:, 110, :])),
                            cmap='seismic', vmax=1, vmin=-1)
                 plt.text(0.05, 0.05, f'epoch {epoch + 1}\n{time_elapsed:.1f}s', fontsize=20)
+                plt.colorbar()
 
                 plt.axis('off')
                 plt.savefig(self.save_folder + f'/mask_epoch_{epoch + 1}.png', bbox_inches='tight')
@@ -529,9 +532,9 @@ class ImplicitRegistrator:
                 wandb.log({"MSE": torch.nn.functional.mse_loss(self.fixed_image, transformed_image),
                            "SSIM": ssim(transformed_image.cpu().numpy(), self.fixed_image.cpu().numpy(),
                   data_range=transformed_image.cpu().numpy().max() - transformed_image.cpu().numpy().min()),
-                           "x_error (mm)": np.mean(abs(self.dvf.cpu().numpy() - output.cpu().numpy()), (0, 1, 2))[0],
-                           "y_error (mm)": np.mean(abs(self.dvf.cpu().numpy() - output.cpu().numpy()), (0, 1, 2))[1],
-                           "z_error (mm)": np.mean(abs(self.dvf.cpu().numpy() - output.cpu().numpy()), (0, 1, 2))[2],
+                           "SI_error (mm)": np.mean(abs(self.dvf.cpu().numpy() - output.cpu().numpy()), (0, 1, 2))[0],
+                           "AP_error (mm)": np.mean(abs(self.dvf.cpu().numpy() - output.cpu().numpy()), (0, 1, 2))[1],
+                           "LR_error (mm)": np.mean(abs(self.dvf.cpu().numpy() - output.cpu().numpy()), (0, 1, 2))[2],
                            "HD95 (mm)": hd95,
                            "loss": loss,
                            "epoch": epoch})

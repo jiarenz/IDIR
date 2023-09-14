@@ -83,14 +83,15 @@ kwargs["verbose"] = True
 kwargs["hyper_regularization"] = False
 kwargs["jacobian_regularization"] = False
 kwargs["bending_regularization"] = True
-kwargs["alpha_bending"] = 50
+kwargs["alpha_bending"] = 100
 kwargs["network_type"] = "SIREN"  # Options are "MLP" and "SIREN"
 kwargs["save_folder"] = save_folder
 kwargs["mask"] = mask_exp
 kwargs["batch_size"] = 10000
 # kwargs["voi"] = voi
 kwargs["loss_function"] = 'ncc'
-checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230910_232109"]
+# checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230910_232109"]
+checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230914_125620"]
 if args.mode == "finetune":
     kwargs["checkpoint"] = f"/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/liver_motion/{checkpoints[args.case_id]}/network.pt"
     kwargs["loss_function"] = 'mse'

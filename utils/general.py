@@ -195,7 +195,7 @@ def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_pa
             voi[int(text[1]) - 1, int(text[3]), int(text[4])] = 1
     voi = np.flip(voi, axis=0).transpose(0, 2, 1)
 
-    # mask = fixed_image > np.max(fixed_image) / 10
+    mask = fixed_image > np.max(fixed_image) / 150
     # for i in range(fixed_image.shape[0]):
     #     for j in range(fixed_image.shape[1]):
     #         for k in range(fixed_image.shape[2]):
