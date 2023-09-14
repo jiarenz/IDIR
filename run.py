@@ -41,19 +41,26 @@ copyfile(project_dir + '/models/models.py', save_folder + '/models.py')
 copyfile(project_dir + '/utils/general.py', save_folder + '/general.py')
 
 # start a new wandb run to track this script
+if args.mode == "train":
+    run_name = f"patient {args.case_id}-{args.mode}"
+else:
+    run_name = f"patient {args.case_id}-{args.mode}-{args.n_proj} proj"
 wandb.init(
     # set the wandb project where this run will be logged
     project="NeRP4motion",
     dir=f"{save_folder}",
     # track hyperparameters and run metadata
     config=args.__dict__,
-    save_code=True
+    save_code=True,
+    name=run_name
 )
 
 if args.dataset == "DIRLAB":
     (
         img_insp,
         img_exp,
+        dvf,
+        voi,
         landmarks_insp,
         landmarks_exp,
         mask_exp,
@@ -63,6 +70,8 @@ elif args.dataset == "liver_motion":
     (
         img_insp,
         img_exp,
+        dvf,
+        voi,
         landmarks_insp,
         landmarks_exp,
         mask_exp,
@@ -74,18 +83,23 @@ kwargs["verbose"] = True
 kwargs["hyper_regularization"] = False
 kwargs["jacobian_regularization"] = False
 kwargs["bending_regularization"] = True
+kwargs["alpha_bending"] = 50
 kwargs["network_type"] = "SIREN"  # Options are "MLP" and "SIREN"
 kwargs["save_folder"] = save_folder
 kwargs["mask"] = mask_exp
+kwargs["batch_size"] = 10000
+# kwargs["voi"] = voi
+kwargs["loss_function"] = 'ncc'
+checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230910_232109"]
 if args.mode == "finetune":
-    kwargs["checkpoint"] = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/liver_motion/training_1_20230906_162636/network.pt"
+    kwargs["checkpoint"] = f"/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/liver_motion/{checkpoints[args.case_id]}/network.pt"
     kwargs["loss_function"] = 'mse'
     kwargs["hyper_regularization"] = False
     kwargs["jacobian_regularization"] = False
     kwargs["bending_regularization"] = False
-    kwargs["epochs"] = 500
+    kwargs["epochs"] = 200
 
-ImpReg = models.ImplicitRegistrator(img_exp, img_insp, **kwargs)
+ImpReg = models.ImplicitRegistrator(img_exp, img_insp, dvf, voi, voxel_size, **kwargs)
 if args.mode == "finetune":
     ImpReg.fit(mode='finetune', n_proj=args.n_proj)
 else:

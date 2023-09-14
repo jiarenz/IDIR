@@ -13,6 +13,8 @@ import numpy as np
 import wandb
 from skimage.metrics import structural_similarity as ssim
 from torch.utils.checkpoint import checkpoint
+import time
+import medpy.metric
 
 
 class ImplicitRegistrator:
@@ -42,7 +44,7 @@ class ImplicitRegistrator:
             .reshape(output_shape[0], output_shape[1])
         )
 
-    def __init__(self, moving_image, fixed_image, **kwargs):
+    def __init__(self, moving_image, fixed_image, dvf, voi, voxel_size, **kwargs):
         """Initialize the learning model."""
 
         # Set all default arguments in a dict: self.args
@@ -245,8 +247,14 @@ class ImplicitRegistrator:
         # Initialization
         self.moving_image = moving_image
         self.fixed_image = fixed_image
+        self.dvf = dvf
+        self.voxel_size = voxel_size
+        self.voi = voi
 
         self.possible_coordinate_tensor = general.make_masked_coordinate_tensor(
+            np.ones(fixed_image.shape), self.fixed_image.shape
+        )
+        self.possible_masked_coordinate_tensor = general.make_masked_coordinate_tensor(
             self.mask, self.fixed_image.shape
         )
 
@@ -329,9 +337,9 @@ class ImplicitRegistrator:
         if mode == 'train':
             loss = 0
             indices = torch.randperm(
-                self.possible_coordinate_tensor.shape[0], device="cuda"
+                self.possible_masked_coordinate_tensor.shape[0], device="cuda"
             )[: self.batch_size]
-            coordinate_tensor = self.possible_coordinate_tensor[indices, :]
+            coordinate_tensor = self.possible_masked_coordinate_tensor[indices, :]
             coordinate_tensor = coordinate_tensor.requires_grad_(True)
 
             output = self.network(coordinate_tensor)
@@ -446,7 +454,9 @@ class ImplicitRegistrator:
 
         # print(f"epoch: {epoch}, loss: {loss}")
         torch.save(self.network.state_dict(), self.save_folder + '/network.pt')
-        if (epoch % 100 == 0 and mode == 'train') or (epoch % 10 == 0 and mode == 'finetune'):
+        if (epoch % 10 == 0 and mode == 'train') or (epoch % 10 == 0 and mode == 'finetune'):
+            end_time = time.time()
+            time_elapsed = end_time - self.start_time
             with torch.no_grad():
                 output = []
                 for i in range(0, self.possible_coordinate_tensor.shape[0], self.batch_size):
@@ -455,20 +465,81 @@ class ImplicitRegistrator:
                 coord_temp = torch.add(output, self.possible_coordinate_tensor)
                 transformed_image = self.transform_no_add(coord_temp)
                 transformed_image = transformed_image.reshape(self.moving_image.shape)
-                plt.imshow(np.concatenate((self.moving_image.cpu().numpy()[:, 110, :],
-                                   self.fixed_image.cpu().numpy()[:, 110, :],
-                                   transformed_image.cpu().numpy()[:, 110, :])), cmap='gray')
+                plt.imshow(np.concatenate((np.concatenate((self.fixed_image.cpu().numpy()[:, 110, :],
+                           self.moving_image.cpu().numpy()[:, 110, :],
+                           transformed_image.cpu().numpy()[:, 110, :])),
+                           np.concatenate((abs(self.fixed_image.cpu().numpy()[:, 110, :] - self.fixed_image.cpu().numpy()[:, 110, :]),
+                           abs(self.moving_image.cpu().numpy()[:, 110, :] - self.fixed_image.cpu().numpy()[:, 110, :]),
+                           abs(transformed_image.cpu().numpy()[:, 110, :] - self.fixed_image.cpu().numpy()[:, 110, :])))),
+                                          axis=1),
+                           cmap='gray',
+                           vmax=0.1)
+                plt.text(0.05, 0.05, f'epoch {epoch + 1}\n{time_elapsed:.1f}s', fontsize=20)
+                plt.axis('off')
                 plt.savefig(self.save_folder + f'/epoch_{epoch + 1}.png', bbox_inches='tight')
+                plt.close()
+
+                output = output.reshape(self.moving_image.shape + (3,))
+                output = output * 0.5 * torch.tensor(self.fixed_image.shape).to(output).reshape(1, 1, 1, 3)
+                output = output * torch.tensor(self.voxel_size).to(output).reshape(1, 1, 1, 3)
+                plt.figure()
+                plt.imshow(np.concatenate(
+                    (np.concatenate((self.dvf.cpu().numpy()[:, 110, :, 0],
+                                   self.dvf.cpu().numpy()[:, 110, :, 1],
+                                   self.dvf.cpu().numpy()[:, 110, :, 2])),
+                    np.concatenate((output.cpu().numpy()[:, 110, :, 0],
+                                output.cpu().numpy()[:, 110, :, 1],
+                                output.cpu().numpy()[:, 110, :, 2]))),
+                    axis=1), cmap='seismic', vmax=2, vmin=-2)
+                plt.text(0.05, 0.05, f'epoch {epoch + 1}\n{time_elapsed:.1f}s', fontsize=20)
+
+                plt.axis('off')
+                plt.savefig(self.save_folder + f'/dvf_epoch_{epoch + 1}.png', bbox_inches='tight')
+                plt.close()
+
+                NeRP_transformed_voi = self.transform_no_add(coord_temp, moving_image=self.voi.to(coord_temp))
+                NeRP_transformed_voi = NeRP_transformed_voi.reshape(self.moving_image.shape)
+                # medpy.metric.binary.hd95(NeRP_transformed_voi.cpu().numpy(),
+                #                          self.voi.cpu().numpy(),
+                #                          voxelspacing=self.voxel_size)
+                normalized_dvf = self.dvf.to(output) / torch.tensor(self.voxel_size).to(output).reshape(1, 1, 1, 3)
+                normalized_dvf = normalized_dvf * 2 / torch.tensor(self.fixed_image.shape).to(output).reshape(1, 1, 1, 3)
+                normalized_dvf = normalized_dvf.view(-1, 3)
+                ground_truth_transformed_voi = self.transform_no_add(normalized_dvf + self.possible_coordinate_tensor,
+                                                                     moving_image=self.voi.to(output))
+                ground_truth_transformed_voi = ground_truth_transformed_voi.reshape(self.moving_image.shape)
+                ground_truth_transformed_voi[ground_truth_transformed_voi < 0.5] = 0
+                NeRP_transformed_voi[NeRP_transformed_voi < 0.5] = 0
+                hd95 = medpy.metric.binary.hd95(NeRP_transformed_voi.cpu().numpy(),
+                                                ground_truth_transformed_voi.cpu().numpy(),
+                                                voxelspacing=self.voxel_size)
+
+                plt.figure()
+                plt.imshow(np.concatenate((ground_truth_transformed_voi.cpu().numpy()[:, 110, :],
+                                          NeRP_transformed_voi.cpu().numpy()[:, 110, :],
+                                          NeRP_transformed_voi.cpu().numpy()[:, 110, :] - ground_truth_transformed_voi.cpu().numpy()[:, 110, :])),
+                           cmap='seismic', vmax=1, vmin=-1)
+                plt.text(0.05, 0.05, f'epoch {epoch + 1}\n{time_elapsed:.1f}s', fontsize=20)
+
+                plt.axis('off')
+                plt.savefig(self.save_folder + f'/mask_epoch_{epoch + 1}.png', bbox_inches='tight')
+                plt.close()
+
         # Perform the backpropagation and update the parameters accordingly
                 wandb.log({"MSE": torch.nn.functional.mse_loss(self.fixed_image, transformed_image),
                            "SSIM": ssim(transformed_image.cpu().numpy(), self.fixed_image.cpu().numpy(),
                   data_range=transformed_image.cpu().numpy().max() - transformed_image.cpu().numpy().min()),
+                           "x_error (mm)": np.mean(abs(self.dvf.cpu().numpy() - output.cpu().numpy()), (0, 1, 2))[0],
+                           "y_error (mm)": np.mean(abs(self.dvf.cpu().numpy() - output.cpu().numpy()), (0, 1, 2))[1],
+                           "z_error (mm)": np.mean(abs(self.dvf.cpu().numpy() - output.cpu().numpy()), (0, 1, 2))[2],
+                           "HD95 (mm)": hd95,
                            "loss": loss,
                            "epoch": epoch})
         for param in self.network.parameters():
             param.grad = None
         loss.backward()
         self.optimizer.step()
+        self.scheduler.step(loss)
 
         # Store the value of the total loss
         if self.verbose:
@@ -526,6 +597,9 @@ class ImplicitRegistrator:
             self.data_loss_list = [0 for _ in range(epochs)]
 
         # Perform training iterations
+        self.start_time = time.time()
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min',
+                                                               patience=50, factor=0.5)
         for i in tqdm.tqdm(range(epochs)):
             self.training_iteration(i, mode=mode, n_proj=n_proj)
 

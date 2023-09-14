@@ -85,7 +85,7 @@ def load_image_DIRLab(variation=1, folder=r"D:\Data\DIRLAB\Case", mode='train'):
 
     if mode == "train":
         insp_phase = "00"
-        exp_phase = "20"
+        exp_phase = "50"
     elif mode == "finetune":
         insp_phase = "40"
         exp_phase = "60"
@@ -136,51 +136,88 @@ def load_image_DIRLab(variation=1, folder=r"D:\Data\DIRLAB\Case", mode='train'):
 def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_patients", mode='train'):
     patients = ["ARENDS_WILLIAM_100448365_2017NOV29_131132_EOVIST",
                 "MURTON_ROBERT_18051141_2018MAY31_113605_EOVIST",
-                "BLAKE_ROBERT_035742839_2021APR14_134316_EOVIST",
-                "HARDIN_LINDA_101599027_2022OCT28_125913_EOVIST",
-                "TRUELOVE_CHARLES_101461481_2022JAN07_130825_EOVIST",
-                "GIETZEN_ANDREW_101410533_2021OCT26_114742_EOVIST",
-                "WILSON_PHILIP_040866620_2020SEP16_093357_EOVIST",
-                "DEAKIN_SHIRLEY_100684937_2018APR13_115437_EOVIST",
+                # "TRUELOVE_CHARLES_101461481_2022JAN07_130825_EOVIST",
+                # "GIETZEN_ANDREW_101410533_2021OCT26_114742_EOVIST",
+                # "WILSON_PHILIP_040866620_2020SEP16_093357_EOVIST",
+                "BROADWORTH_RICKEY_29938374_2017NOV01_101511_EOVIST",
                 "MILLER_CAROL_100512736_2017JUN16_152234_MULTIHANCE",
                 "HEINROTH_ROBERT_100583154_2018FEB21_094222_EOVIST"]
     patient = patients[variation]
-    folder = folder + f"/{patient}" + "/reconstruction/Tornado5_SMIN90_SMAX180_STRIDE90_DMC"
-    data = {}
+    img_folder = folder + f"/{patient}" + "/reconstruction/Tornado5_SMIN90_SMAX180_STRIDE90_DMC"
+    dvf_folder = folder + f"/{patient}" + "/reconstruction/Tornado5_SMIN90_SMAX180_STRIDE90_DMC_DEF"
+    images = {}
+    dvfs = {}
     first_phase_time = 10000
-    temp_resolution = 90 * 150 / 1000
-    for file in os.listdir(folder):
+    temp_resolution = 90 * 150 / 1000  # 13.5s
+    for file in os.listdir(img_folder):
         if file.endswith(".img") and file.startswith("Sequence"):
             phase_time = int(file[-10:-4]) * 150 / 1000
-            img = nib.load(os.path.join(f"{folder}/", file))
+            img = nib.load(os.path.join(f"{img_folder}/", file))
             img_numpy = img.get_fdata().astype(np.float32)
-            data[phase_time] = np.flip(img_numpy, axis=2).transpose(2, 1, 0)  # (i->s, a->p, r->l)
+            images[phase_time] = np.flip(img_numpy, axis=2).transpose(2, 1, 0)  # (i->s, a->p, r->l)
             if phase_time < first_phase_time:
                 first_phase_time = phase_time
+    for file in os.listdir(dvf_folder):
+        if file.endswith(".img") and file.startswith("DeformationField"):
+            state = int(file[-6:-4])
+            dvf = nib.load(os.path.join(f"{dvf_folder}/", file))
+            dvf_numpy = dvf.get_fdata().astype(np.float32)
+            dvfs[state] = np.squeeze(np.flip(dvf_numpy, axis=2).transpose(2, 1, 0, 3, 4))   # (i->s, a->p, r->l)
     mid_phase_time = 3680 * 150 / 1000  # 9.2 min
     voxel_size = [img.affine[2, 2], img.affine[1, 1], img.affine[0, 0]]
 
     if mode == "train":
         fixed_phase_time = mid_phase_time + temp_resolution
-        moving_phase_time = mid_phase_time + temp_resolution * 9
+        moving_phase_time = mid_phase_time + temp_resolution * 2
+        fixed_state = 38
+        moving_state = 40
     elif mode == "finetune":
         fixed_phase_time = mid_phase_time + temp_resolution * 20
-        moving_phase_time = mid_phase_time + temp_resolution * 29
+        moving_phase_time = mid_phase_time + temp_resolution * 22
+        fixed_state = 58
+        moving_state = 60
 
-    fixed_image = data[fixed_phase_time]
-    moving_image = data[moving_phase_time]
+    fixed_image = images[fixed_phase_time]
+    moving_image = images[moving_phase_time]
+    # moving_image = np.roll(fixed_image, 20, axis=2)
+    dvf = -(dvfs[moving_state] - dvfs[fixed_state]) * np.array(voxel_size).reshape(1, 1, 1, 3)
 
     # imgsitk_in = sitk.ReadImage(folder + r"Masks\case" + str(variation) + "_T00_s.mhd")
 
     # mask = np.clip(sitk.GetArrayFromImage(imgsitk_in), 0, 1)
     mask = np.ones(fixed_image.shape)
+    voi_path = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/voi/Sequence_0000_VOI.txt"
+    voi_txt = open(voi_path).read().split()
+    voi = np.zeros_like(fixed_image)
+    for text in voi_txt:
+        if text[:5] == "Slice":
+            text = text.split("_")
+            voi[int(text[1]) - 1, int(text[3]), int(text[4])] = 1
+    voi = np.flip(voi, axis=0).transpose(0, 2, 1)
+
+    # mask = fixed_image > np.max(fixed_image) / 10
+    # for i in range(fixed_image.shape[0]):
+    #     for j in range(fixed_image.shape[1]):
+    #         for k in range(fixed_image.shape[2]):
+    #             if f"Slice_{i+1}_voxel_{j}_{k}" in voi_txt:
+    #                 voi[i, j, k] = 1
+    # roi_names = ['Bowel_small', 'Colon', 'Stomach', 'Duodenum']
+    # vois = {}
+    # for roi_name in roi_names:
+    #     voi = nib.load(f"/mnt/ibrixfs01-FUNCI/Liver_2015_039/patients/BROADWORTH_RICKEY_29938374/2017NOV01_101511_EOVIST/nifti/OARcontour/{roi_name}_OAR.img")
+    #     voi_numpy = voi.get_fdata().astype(np.bool_)
+    #     vois[roi_name] = np.flip(voi_numpy, axis=2).transpose(2, 1, 0)
 
     fixed_image = torch.from_numpy(fixed_image.copy())
     moving_image = torch.from_numpy(moving_image.copy())
+    dvf = torch.from_numpy(dvf.copy())
+    voi = torch.from_numpy(voi.copy())
 
     return (
         fixed_image,
         moving_image,
+        dvf,
+        voi,
         None,
         None,
         mask,
