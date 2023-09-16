@@ -2,8 +2,9 @@ import numpy as np
 import os
 import torch
 import SimpleITK as sitk
-import os
 import nibabel as nib
+from models import models
+from scipy.interpolate import NearestNDInterpolator
 
 
 def compute_landmark_accuracy(landmarks_pred, landmarks_gt, voxel_size):
@@ -126,6 +127,8 @@ def load_image_DIRLab(variation=1, folder=r"D:\Data\DIRLAB\Case", mode='train'):
     return (
         image_insp,
         image_exp,
+        torch.zeros(image_insp.shape + (3,)).to(image_insp),
+        torch.from_numpy(mask).to(image_insp),
         landmarks_insp,
         landmarks_exp,
         mask,
@@ -162,38 +165,63 @@ def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_pa
             state = int(file[-6:-4])
             dvf = nib.load(os.path.join(f"{dvf_folder}/", file))
             dvf_numpy = dvf.get_fdata().astype(np.float32)
-            dvfs[state] = np.squeeze(np.flip(dvf_numpy, axis=2).transpose(2, 1, 0, 3, 4))   # (i->s, a->p, r->l)
-    mid_phase_time = 3680 * 150 / 1000  # 9.2 min
+            dvf_numpy = np.squeeze(np.flip(dvf_numpy, axis=2).transpose(2, 1, 0, 3, 4))   # (i->s, a->p, r->l)
+            dvf_numpy = np.flip(dvf_numpy, axis=3)
+            dvf_numpy[:, :, :, 0] = -dvf_numpy[:, :, :, 0]
+            dvfs[state] = dvf_numpy
+    mid_phase_time = 3680 * 150 / 1000  # 9.2 min, state 37
+    last_phase_time = 6819 * 150 / 1000  # 17.0 min (1022.85s)
     voxel_size = [img.affine[2, 2], img.affine[1, 1], img.affine[0, 0]]
 
     if mode == "train":
-        fixed_phase_time = mid_phase_time + temp_resolution
-        moving_phase_time = mid_phase_time + temp_resolution * 2
-        fixed_state = 38
-        moving_state = 40
+        moving_phase_time = mid_phase_time + temp_resolution
+        # moving_phase_time = 27.0
+        fixed_phase_time = mid_phase_time + temp_resolution * 2
+        # fixed_phase_time = mid_phase_time + temp_resolution * 35
+        # fixed_phase_time = last_phase_time
+        moving_state = 37
+        fixed_state = 39
+        # moving_state = 1
+        # fixed_state = 72
     elif mode == "finetune":
-        fixed_phase_time = mid_phase_time + temp_resolution * 20
-        moving_phase_time = mid_phase_time + temp_resolution * 22
-        fixed_state = 58
-        moving_state = 60
+        moving_phase_time = mid_phase_time + temp_resolution * 20  # 13.7 min
+        fixed_phase_time = mid_phase_time + temp_resolution * 22  # 14.2 min
+        moving_state = 57
+        fixed_state = 59
 
     fixed_image = images[fixed_phase_time]
     moving_image = images[moving_phase_time]
     # moving_image = np.roll(fixed_image, 20, axis=2)
-    dvf = -(dvfs[moving_state] - dvfs[fixed_state]) * np.array(voxel_size).reshape(1, 1, 1, 3)
+    # dvf = -(dvfs[moving_state] - dvfs[fixed_state]) * np.array(voxel_size).reshape(1, 1, 1, 3)
+    dvf = dvfs[moving_state] - dvfs[fixed_state]  # It seems the unit of DVFs are in mm.
+    dvf_72_to_moving = dvfs[moving_state] - dvfs[72]
 
-    # imgsitk_in = sitk.ReadImage(folder + r"Masks\case" + str(variation) + "_T00_s.mhd")
-
-    # mask = np.clip(sitk.GetArrayFromImage(imgsitk_in), 0, 1)
-    mask = np.ones(fixed_image.shape)
-    voi_path = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/voi/Sequence_0000_VOI.txt"
-    voi_txt = open(voi_path).read().split()
-    voi = np.zeros_like(fixed_image)
-    for text in voi_txt:
-        if text[:5] == "Slice":
-            text = text.split("_")
-            voi[int(text[1]) - 1, int(text[3]), int(text[4])] = 1
-    voi = np.flip(voi, axis=0).transpose(0, 2, 1)
+    # mask = np.ones(fixed_image.shape)
+    voi_paths = {"Liver": "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/voi/Sequence_0000_VOI.txt",
+                 "Stomach": "/mnt/ibrixfs04-Kspace/motion_patients/Jiaren_test/test_vois/Stomach_OAR.txt",
+                 "Duodenum": "/mnt/ibrixfs04-Kspace/motion_patients/Jiaren_test/test_vois/Duodenum_OAR.txt",
+                 "Colon": "/mnt/ibrixfs04-Kspace/motion_patients/Jiaren_test/test_vois/Colon_OAR.txt",
+                 "Bowel_small": "/mnt/ibrixfs04-Kspace/motion_patients/Jiaren_test/test_vois/Bowel_small_OAR.txt"}
+    vois = {}
+    for k, v in voi_paths.items():
+        voi_txt = open(voi_paths[k]).read().split()
+        voi_state_72 = np.zeros_like(fixed_image)
+        for text in voi_txt:
+            if text[:5] == "Slice":
+                text = text.split("_")
+                voi_state_72[int(text[1]) - 1, int(text[3]), int(text[4])] = 1
+        voi_state_72 = np.flip(voi_state_72, axis=0).transpose(0, 2, 1)
+        normalized_dvf = torch.from_numpy(dvf_72_to_moving).cuda() / torch.tensor(voxel_size).cuda().reshape(1, 1, 1, 3)
+        normalized_dvf = normalized_dvf * 2 / torch.tensor(fixed_image.shape).cuda().reshape(1, 1, 1, 3)
+        normalized_dvf = normalized_dvf.view(-1, 3)
+        coordinate_tensor = [torch.linspace(-1, 1, fixed_image.shape[i]) for i in range(3)]
+        X, Y, Z = torch.meshgrid(*coordinate_tensor)
+        possible_coordinate_tensor = make_masked_coordinate_tensor(np.ones(fixed_image.shape),
+                                                                   dims=fixed_image.shape)
+        normalized_dvf = normalized_dvf + possible_coordinate_tensor
+        interp = NearestNDInterpolator(normalized_dvf.cpu(), voi_state_72.flatten())
+        voi_moving_state = interp(X, Y, Z)
+        vois[k] = torch.from_numpy(voi_moving_state.copy()).cuda()
 
     mask = fixed_image > np.max(fixed_image) / 150
     # for i in range(fixed_image.shape[0]):
@@ -211,13 +239,13 @@ def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_pa
     fixed_image = torch.from_numpy(fixed_image.copy())
     moving_image = torch.from_numpy(moving_image.copy())
     dvf = torch.from_numpy(dvf.copy())
-    voi = torch.from_numpy(voi.copy())
+    # voi = torch.from_numpy(voi.copy())
 
     return (
         fixed_image,
         moving_image,
         dvf,
-        voi,
+        vois,
         None,
         None,
         mask,

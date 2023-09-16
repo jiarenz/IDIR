@@ -44,7 +44,7 @@ class ImplicitRegistrator:
             .reshape(output_shape[0], output_shape[1])
         )
 
-    def __init__(self, moving_image, fixed_image, dvf, voi, voxel_size, **kwargs):
+    def __init__(self, moving_image, fixed_image, dvf, vois, voxel_size, **kwargs):
         """Initialize the learning model."""
 
         # Set all default arguments in a dict: self.args
@@ -249,7 +249,7 @@ class ImplicitRegistrator:
         self.fixed_image = fixed_image
         self.dvf = dvf
         self.voxel_size = voxel_size
-        self.voi = voi
+        self.vois = vois
 
         self.possible_coordinate_tensor = general.make_masked_coordinate_tensor(
             np.ones(fixed_image.shape), self.fixed_image.shape
@@ -499,42 +499,47 @@ class ImplicitRegistrator:
                 plt.savefig(self.save_folder + f'/dvf_epoch_{epoch + 1}.png', bbox_inches='tight')
                 plt.close()
 
-                NeRP_transformed_voi = self.transform_no_add(coord_temp, moving_image=self.voi.to(coord_temp))
-                NeRP_transformed_voi = NeRP_transformed_voi.reshape(self.moving_image.shape)
-                # medpy.metric.binary.hd95(NeRP_transformed_voi.cpu().numpy(),
-                #                          self.voi.cpu().numpy(),
-                #                          voxelspacing=self.voxel_size)
-                normalized_dvf = self.dvf.to(output) / torch.tensor(self.voxel_size).to(output).reshape(1, 1, 1, 3)
-                normalized_dvf = normalized_dvf * 2 / torch.tensor(self.fixed_image.shape).to(output).reshape(1, 1, 1, 3)
-                normalized_dvf = normalized_dvf.view(-1, 3)
-                ground_truth_transformed_voi = self.transform_no_add(normalized_dvf + self.possible_coordinate_tensor,
-                                                                     moving_image=self.voi.to(output))
-                ground_truth_transformed_voi = ground_truth_transformed_voi.reshape(self.moving_image.shape)
-                ground_truth_transformed_voi[ground_truth_transformed_voi < 0.5] = 0
-                NeRP_transformed_voi[NeRP_transformed_voi < 0.5] = 0
-                hd95 = medpy.metric.binary.hd95(NeRP_transformed_voi.cpu().numpy(),
-                                                ground_truth_transformed_voi.cpu().numpy(),
-                                                voxelspacing=self.voxel_size, connectivity=3)
+                hd95 = {}
+                for organ, voi in self.vois.items():
+                    NeRP_transformed_voi = self.transform_no_add(coord_temp, moving_image=voi)
+                    NeRP_transformed_voi = NeRP_transformed_voi.reshape(self.moving_image.shape)
+                    # medpy.metric.binary.hd95(NeRP_transformed_voi.cpu().numpy(),
+                    #                          self.voi.cpu().numpy(),
+                    #                          voxelspacing=self.voxel_size)
+                    normalized_dvf = self.dvf.to(output) / torch.tensor(self.voxel_size).to(output).reshape(1, 1, 1, 3)
+                    normalized_dvf = normalized_dvf * 2 / torch.tensor(self.fixed_image.shape).to(output).reshape(1, 1, 1, 3)
+                    normalized_dvf = normalized_dvf.view(-1, 3)
+                    ground_truth_transformed_voi = self.transform_no_add(normalized_dvf + self.possible_coordinate_tensor,
+                                                                         moving_image=voi)
+                    ground_truth_transformed_voi = ground_truth_transformed_voi.reshape(self.moving_image.shape)
+                    ground_truth_transformed_voi[ground_truth_transformed_voi < 0.5] = 0
+                    NeRP_transformed_voi[NeRP_transformed_voi < 0.5] = 0
+                    ground_truth_transformed_voi[ground_truth_transformed_voi >= 0.5] = 1
+                    NeRP_transformed_voi[NeRP_transformed_voi >= 0.5] = 1
+                    hd95[organ] = medpy.metric.binary.hd95(NeRP_transformed_voi.cpu().numpy(),
+                                                    ground_truth_transformed_voi.cpu().numpy(),
+                                                    voxelspacing=self.voxel_size, connectivity=3)
 
-                plt.figure()
-                plt.imshow(np.concatenate((ground_truth_transformed_voi.cpu().numpy()[:, 110, :],
-                                          NeRP_transformed_voi.cpu().numpy()[:, 110, :],
-                                          NeRP_transformed_voi.cpu().numpy()[:, 110, :] - ground_truth_transformed_voi.cpu().numpy()[:, 110, :])),
-                           cmap='seismic', vmax=1, vmin=-1)
-                plt.text(0.05, 0.05, f'epoch {epoch + 1}\n{time_elapsed:.1f}s', fontsize=20)
-                plt.colorbar()
+                    plt.figure()
+                    plt.imshow(np.concatenate((ground_truth_transformed_voi.cpu().numpy()[40, :, :],
+                                              NeRP_transformed_voi.cpu().numpy()[40, :, :],
+                                              NeRP_transformed_voi.cpu().numpy()[40, :, :] - ground_truth_transformed_voi.cpu().numpy()[40, :, :])),
+                               cmap='seismic', vmax=1, vmin=-1)
+                    plt.text(0.05, 0.05, f'epoch {epoch + 1}\n{time_elapsed:.1f}s', fontsize=20)
+                    plt.colorbar()
+                    plt.axis('off')
+                    plt.savefig(self.save_folder + f'/{organ}_mask_epoch_{epoch + 1}.png', bbox_inches='tight')
+                    plt.close()
 
-                plt.axis('off')
-                plt.savefig(self.save_folder + f'/mask_epoch_{epoch + 1}.png', bbox_inches='tight')
-                plt.close()
+                mean_abs_dvf_error = np.mean(abs(self.dvf.cpu().numpy() - output.cpu().numpy())[self.mask], 0)
 
         # Perform the backpropagation and update the parameters accordingly
                 wandb.log({"MSE": torch.nn.functional.mse_loss(self.fixed_image, transformed_image),
                            "SSIM": ssim(transformed_image.cpu().numpy(), self.fixed_image.cpu().numpy(),
                   data_range=transformed_image.cpu().numpy().max() - transformed_image.cpu().numpy().min()),
-                           "SI_error (mm)": np.mean(abs(self.dvf.cpu().numpy() - output.cpu().numpy()), (0, 1, 2))[0],
-                           "AP_error (mm)": np.mean(abs(self.dvf.cpu().numpy() - output.cpu().numpy()), (0, 1, 2))[1],
-                           "LR_error (mm)": np.mean(abs(self.dvf.cpu().numpy() - output.cpu().numpy()), (0, 1, 2))[2],
+                           "SI_error (mm)": mean_abs_dvf_error[0],
+                           "AP_error (mm)": mean_abs_dvf_error[1],
+                           "LR_error (mm)": mean_abs_dvf_error[2],
                            "HD95 (mm)": hd95,
                            "loss": loss,
                            "epoch": epoch})
