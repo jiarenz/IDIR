@@ -71,7 +71,7 @@ elif args.dataset == "liver_motion":
         img_insp,
         img_exp,
         dvf,
-        voi,
+        vois,
         landmarks_insp,
         landmarks_exp,
         mask_exp,
@@ -91,7 +91,7 @@ kwargs["batch_size"] = 10000
 # kwargs["voi"] = voi
 kwargs["loss_function"] = 'ncc'
 # checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230910_232109"]
-checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230914_125620"]
+checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230915_120704"]
 if args.mode == "finetune":
     kwargs["checkpoint"] = f"/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/liver_motion/{checkpoints[args.case_id]}/network.pt"
     kwargs["loss_function"] = 'mse'
@@ -100,7 +100,7 @@ if args.mode == "finetune":
     kwargs["bending_regularization"] = False
     kwargs["epochs"] = 200
 
-ImpReg = models.ImplicitRegistrator(img_exp, img_insp, dvf, voi, voxel_size, **kwargs)
+ImpReg = models.ImplicitRegistrator(img_exp, img_insp, dvf, vois, voxel_size, **kwargs)
 if args.mode == "finetune":
     ImpReg.fit(mode='finetune', n_proj=args.n_proj)
 else:
