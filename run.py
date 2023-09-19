@@ -17,6 +17,7 @@ parser_main.add_argument('--case_id', type=int, default=0, help='Choose which ca
 parser_main.add_argument('--mode', type=str, default="train", help='Whether to train from scratch or finetune '
                                                                    'an existing model')
 parser_main.add_argument('--n_proj', type=int, default=1, help='Number of projecitions for finetuning')
+parser_main.add_argument('--finetune_lr', type=float, default=1e-5, help='Learning rate for finetuning')
 args = parser_main.parse_args()
 
 start_run_at = time.strftime("%Y%m%d_%H%M%S", time.localtime())
@@ -42,9 +43,9 @@ copyfile(project_dir + '/utils/general.py', save_folder + '/general.py')
 
 # start a new wandb run to track this script
 if args.mode == "train":
-    run_name = f"patient {args.case_id}-{args.mode}"
+    run_name = f"patient {args.case_id}-{args.mode}-{start_run_at}"
 else:
-    run_name = f"patient {args.case_id}-{args.mode}-{args.n_proj} proj"
+    run_name = f"patient {args.case_id}-{args.mode}-{args.n_proj} proj-{start_run_at}"
 wandb.init(
     # set the wandb project where this run will be logged
     project="NeRP4motion",
@@ -91,7 +92,7 @@ kwargs["batch_size"] = 10000
 # kwargs["voi"] = voi
 kwargs["loss_function"] = 'ncc'
 # checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230910_232109"]
-checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230915_120704"]
+checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230916_180324"]
 if args.mode == "finetune":
     kwargs["checkpoint"] = f"/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/liver_motion/{checkpoints[args.case_id]}/network.pt"
     kwargs["loss_function"] = 'mse'
@@ -99,6 +100,7 @@ if args.mode == "finetune":
     kwargs["jacobian_regularization"] = False
     kwargs["bending_regularization"] = False
     kwargs["epochs"] = 200
+    kwargs["finetune_lr"] = args.finetune_lr
 
 ImpReg = models.ImplicitRegistrator(img_exp, img_insp, dvf, vois, voxel_size, **kwargs)
 if args.mode == "finetune":

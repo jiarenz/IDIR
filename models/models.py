@@ -62,7 +62,7 @@ class ImplicitRegistrator:
         )
         self.gpu = kwargs["gpu"] if "gpu" in kwargs else self.args["gpu"]
         self.lr = kwargs["lr"] if "lr" in kwargs else self.args["lr"]
-        self.finetune_lr = kwargs["finetune_lr"] if "lr" in kwargs else self.args["finetune_lr"]
+        self.finetune_lr = kwargs["finetune_lr"] if "finetune_lr" in kwargs else self.args["finetune_lr"]
         self.momentum = (
             kwargs["momentum"] if "momentum" in kwargs else self.args["momentum"]
         )
