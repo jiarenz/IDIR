@@ -18,6 +18,8 @@ parser_main.add_argument('--mode', type=str, default="train", help='Whether to t
                                                                    'an existing model')
 parser_main.add_argument('--n_proj', type=int, default=1, help='Number of projecitions for finetuning')
 parser_main.add_argument('--finetune_lr', type=float, default=1e-5, help='Learning rate for finetuning')
+parser_main.add_argument('--n_epoch_train', type=int, default=2500, help='number of training epochs')
+parser_main.add_argument('--n_epoch_finetune', type=int, default=200, help='number of finetuning epochs')
 args = parser_main.parse_args()
 
 start_run_at = time.strftime("%Y%m%d_%H%M%S", time.localtime())
@@ -68,17 +70,20 @@ if args.dataset == "DIRLAB":
         voxel_size,
     ) = general.load_image_DIRLab(args.case_id, f"{data_dir}/Case", mode=args.mode)
 elif args.dataset == "liver_motion":
-    (
-        img_insp,
-        img_exp,
-        dvf,
-        vois,
-        landmarks_insp,
-        landmarks_exp,
-        mask_exp,
-        voxel_size,
-    ) = general.load_image_liver_motion(args.case_id, f"{data_dir}", mode=args.mode)
-
+    if args.mode == "train":
+        (
+            img_insp,
+            img_exp,
+            dvf,
+            vois,
+            landmarks_insp,
+            landmarks_exp,
+            mask_exp,
+            voxel_size,
+        ) = general.load_image_liver_motion(args.case_id, f"{data_dir}", mode=args.mode)
+    else:
+        image_series_data, fixed_states = general.load_image_series_liver_motion(args.case_id, f"{data_dir}", mode=args.mode)
+        mask_exp = image_series_data[0][-2]
 kwargs = {}
 kwargs["verbose"] = True
 kwargs["hyper_regularization"] = False
@@ -99,13 +104,28 @@ if args.mode == "finetune":
     kwargs["hyper_regularization"] = False
     kwargs["jacobian_regularization"] = False
     kwargs["bending_regularization"] = False
-    kwargs["epochs"] = 200
+    # kwargs["alpha_bending"] = 10
+    kwargs["epochs"] = args.n_epoch_finetune
     kwargs["finetune_lr"] = args.finetune_lr
 
-ImpReg = models.ImplicitRegistrator(img_exp, img_insp, dvf, vois, voxel_size, **kwargs)
+
 if args.mode == "finetune":
-    ImpReg.fit(mode='finetune', n_proj=args.n_proj)
+    ImpReg = models.ImplicitRegistrator(image_series_data[0][1],
+                                        image_series_data[0][0],
+                                        image_series_data[0][2],
+                                        image_series_data[0][3],
+                                        image_series_data[0][-1], **kwargs)
+    for i in range(len(image_series_data)):
+        # ImpReg.moving_image = image_series_data[i][0].cuda()
+        ImpReg.fixed_image = image_series_data[i][1].cuda()
+        ImpReg.dvf = image_series_data[i][2]
+        ImpReg.vois = image_series_data[i][3]
+        ImpReg.voxel_size = image_series_data[i][-1]
+        ImpReg.mask = image_series_data[i][-2]
+        ImpReg.fixed_state = fixed_states[i]
+        ImpReg.fit(mode='finetune', n_proj=args.n_proj)
 else:
+    ImpReg = models.ImplicitRegistrator(img_exp, img_insp, dvf, vois, voxel_size, **kwargs)
     ImpReg.fit()
 # new_landmarks_orig, _ = general.compute_landmarks(
 #     ImpReg.network, landmarks_insp, image_size=img_insp.shape

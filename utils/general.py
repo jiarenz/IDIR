@@ -136,7 +136,9 @@ def load_image_DIRLab(variation=1, folder=r"D:\Data\DIRLAB\Case", mode='train'):
     )
 
 
-def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_patients", mode='train'):
+def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_patients", mode='train',
+                            train_moving_state=37, train_fixed_state=39, finetune_moving_state=57,
+                            finetune_fixed_state=59):
     patients = ["ARENDS_WILLIAM_100448365_2017NOV29_131132_EOVIST",
                 "MURTON_ROBERT_18051141_2018MAY31_113605_EOVIST",
                 # "TRUELOVE_CHARLES_101461481_2022JAN07_130825_EOVIST",
@@ -160,6 +162,7 @@ def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_pa
             images[phase_time] = np.flip(img_numpy, axis=2).transpose(2, 1, 0)  # (i->s, a->p, r->l)
             if phase_time < first_phase_time:
                 first_phase_time = phase_time
+    phase_times = np.sort(np.array(list(images.keys())))
     for file in os.listdir(dvf_folder):
         if file.endswith(".img") and file.startswith("DeformationField"):
             state = int(file[-6:-4])
@@ -174,20 +177,20 @@ def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_pa
     voxel_size = [img.affine[2, 2], img.affine[1, 1], img.affine[0, 0]]
 
     if mode == "train":
-        moving_phase_time = mid_phase_time + temp_resolution
+        moving_phase_time = phase_times[train_moving_state - 1]
         # moving_phase_time = 27.0
-        fixed_phase_time = mid_phase_time + temp_resolution * 2
+        fixed_phase_time = phase_times[train_fixed_state - 1]
         # fixed_phase_time = mid_phase_time + temp_resolution * 35
         # fixed_phase_time = last_phase_time
-        moving_state = 37
-        fixed_state = 39
+        moving_state = train_moving_state
+        fixed_state = train_fixed_state
         # moving_state = 1
         # fixed_state = 72
     elif mode == "finetune":
-        moving_phase_time = mid_phase_time + temp_resolution * 20  # 13.7 min
-        fixed_phase_time = mid_phase_time + temp_resolution * 22  # 14.2 min
-        moving_state = 57
-        fixed_state = 59
+        moving_phase_time = phase_times[finetune_moving_state - 1]  # 13.7 min
+        fixed_phase_time = phase_times[finetune_fixed_state - 1]  # 14.2 min
+        moving_state = finetune_moving_state
+        fixed_state = finetune_fixed_state
 
     fixed_image = images[fixed_phase_time]
     moving_image = images[moving_phase_time]
@@ -204,26 +207,36 @@ def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_pa
                  "Bowel_small": "/mnt/ibrixfs04-Kspace/motion_patients/Jiaren_test/test_vois/Bowel_small_OAR.txt"}
     vois = {}
     for k, v in voi_paths.items():
-        voi_txt = open(voi_paths[k]).read().split()
-        voi_state_72 = np.zeros_like(fixed_image)
-        for text in voi_txt:
-            if text[:5] == "Slice":
-                text = text.split("_")
-                voi_state_72[int(text[1]) - 1, int(text[3]), int(text[4])] = 1
-        voi_state_72 = np.flip(voi_state_72, axis=0).transpose(0, 2, 1)
-        normalized_dvf = torch.from_numpy(dvf_72_to_moving).cuda() / torch.tensor(voxel_size).cuda().reshape(1, 1, 1, 3)
-        normalized_dvf = normalized_dvf * 2 / torch.tensor(fixed_image.shape).cuda().reshape(1, 1, 1, 3)
-        normalized_dvf = normalized_dvf.view(-1, 3)
-        coordinate_tensor = [torch.linspace(-1, 1, fixed_image.shape[i]) for i in range(3)]
-        X, Y, Z = torch.meshgrid(*coordinate_tensor)
-        possible_coordinate_tensor = make_masked_coordinate_tensor(np.ones(fixed_image.shape),
-                                                                   dims=fixed_image.shape)
-        normalized_dvf = normalized_dvf + possible_coordinate_tensor
-        interp = NearestNDInterpolator(normalized_dvf.cpu(), voi_state_72.flatten())
-        voi_moving_state = interp(X, Y, Z)
-        vois[k] = torch.from_numpy(voi_moving_state.copy()).cuda()
+        if not os.path.isfile(
+                f"/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/voi/{k}_OAR_state_{moving_state}.npy"):
+            voi_txt = open(voi_paths[k]).read().split()
+            voi_state_72 = np.zeros_like(fixed_image)
+            for text in voi_txt:
+                if text[:5] == "Slice":
+                    text = text.split("_")
+                    voi_state_72[int(text[1]) - 1, int(text[3]), int(text[4])] = 1
+            voi_state_72 = np.flip(voi_state_72, axis=0).transpose(0, 2, 1)
+            normalized_dvf = torch.from_numpy(dvf_72_to_moving).cuda() / torch.tensor(voxel_size).cuda().reshape(1, 1, 1, 3)
+            normalized_dvf = normalized_dvf * 2 / torch.tensor(fixed_image.shape).cuda().reshape(1, 1, 1, 3)
+            normalized_dvf = normalized_dvf.view(-1, 3)
+            coordinate_tensor = [torch.linspace(-1, 1, fixed_image.shape[i]) for i in range(3)]
+            X, Y, Z = torch.meshgrid(*coordinate_tensor)
+            possible_coordinate_tensor = make_masked_coordinate_tensor(np.ones(fixed_image.shape),
+                                                                       dims=fixed_image.shape)
+            normalized_dvf = normalized_dvf + possible_coordinate_tensor
+            interp = NearestNDInterpolator(normalized_dvf.cpu(), voi_state_72.flatten())
+            voi_moving_state = interp(X, Y, Z)
+            vois[k] = torch.from_numpy(voi_moving_state.copy()).cuda()
+            np.save(f"/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/voi/{k}_OAR_state_{moving_state}.npy",
+                    voi_moving_state)
+        else:
+            vois[k] = torch.from_numpy(np.load(f"/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/voi/"
+                                               f"{k}_OAR_state_{moving_state}.npy")).cuda()
 
-    mask = fixed_image > np.max(fixed_image) / 150
+    if mode == "finetune":
+        mask = fixed_image > np.max(fixed_image) / 150
+    elif mode == "train":
+        mask = fixed_image > np.max(fixed_image) / 150
     # for i in range(fixed_image.shape[0]):
     #     for j in range(fixed_image.shape[1]):
     #         for k in range(fixed_image.shape[2]):
@@ -251,6 +264,20 @@ def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_pa
         mask,
         voxel_size,
     )
+
+
+def load_image_series_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_patients", mode='train'):
+    # moving_states = [i for i in range(39, 71, 2)]
+    moving_states = [39] * 16
+    fixed_states = [i for i in range(41, 73, 2)]
+    image_series_data = []
+    for i in range(len(moving_states)):
+        image_series_data.append(load_image_liver_motion(variation=variation,
+                                                         folder=folder,
+                                                         mode=mode,
+                                                         finetune_moving_state=moving_states[i],
+                                                         finetune_fixed_state=fixed_states[i]))
+    return image_series_data, fixed_states
 
 
 def fast_trilinear_interpolation(input_array, x_indices, y_indices, z_indices):

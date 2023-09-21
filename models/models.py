@@ -248,6 +248,8 @@ class ImplicitRegistrator:
         self.moving_image = moving_image
         self.fixed_image = fixed_image
         self.dvf = dvf
+        self.estimated_dvf = torch.zeros_like(dvf)
+        self.fixed_state = 0
         self.voxel_size = voxel_size
         self.vois = vois
 
@@ -261,6 +263,7 @@ class ImplicitRegistrator:
         if self.gpu:
             self.moving_image = self.moving_image.cuda()
             self.fixed_image = self.fixed_image.cuda()
+            self.estimated_dvf = self.estimated_dvf.cuda()
 
     def cuda(self):
         """Move the model to the GPU."""
@@ -377,7 +380,7 @@ class ImplicitRegistrator:
             # coordinate_tensor = self.possible_coordinate_tensor[indices, :]
             # coordinate_tensor = coordinate_tensor.requires_grad_(True)
             # output = self.network(coordinate_tensor)
-            coord_temp = torch.add(output, coordinate_tensor)
+            coord_temp = torch.add(output + self.estimated_dvf.reshape(-1, 3), coordinate_tensor)
             output = coord_temp
             # torch.cuda.empty_cache()
             transformed_image = self.transform_no_add(coord_temp)   # (nx*ny*nz)
@@ -462,7 +465,11 @@ class ImplicitRegistrator:
                 for i in range(0, self.possible_coordinate_tensor.shape[0], self.batch_size):
                     output.append(self.network(self.possible_coordinate_tensor[i:i + self.batch_size]))
                 output = torch.cat(output)
-                coord_temp = torch.add(output, self.possible_coordinate_tensor)
+                if mode == "finetune":
+                    coord_temp = torch.add(output + self.estimated_dvf.reshape(-1, 3),
+                                           self.possible_coordinate_tensor)
+                else:
+                    coord_temp = torch.add(output, self.possible_coordinate_tensor)
                 transformed_image = self.transform_no_add(coord_temp)
                 transformed_image = transformed_image.reshape(self.moving_image.shape)
                 plt.imshow(np.concatenate((np.concatenate((self.fixed_image.cpu().numpy()[:, 110, :],
@@ -480,6 +487,8 @@ class ImplicitRegistrator:
                 plt.savefig(self.save_folder + f'/epoch_{epoch + 1}.png', bbox_inches='tight')
                 plt.close()
 
+                if mode == "finetune":
+                    output = output + self.estimated_dvf.reshape(-1, 3)
                 output = output.reshape(self.moving_image.shape + (3,))
                 output = output * 0.5 * torch.tensor(self.fixed_image.shape).to(output).reshape(1, 1, 1, 3)
                 output = output * torch.tensor(self.voxel_size).to(output).reshape(1, 1, 1, 3)
@@ -542,12 +551,23 @@ class ImplicitRegistrator:
                            "LR_error (mm)": mean_abs_dvf_error[2],
                            "HD95 (mm)": hd95,
                            "loss": loss,
-                           "epoch": epoch})
+                           "epoch": epoch,
+                           "Reference state": self.fixed_state})
         for param in self.network.parameters():
             param.grad = None
         loss.backward()
         self.optimizer.step()
         self.scheduler.step(loss)
+        if mode == "finetune":
+            if epoch == self.epochs - 1:
+                with torch.no_grad():
+                    output = []
+                    for i in range(0, self.possible_coordinate_tensor.shape[0], self.batch_size):
+                        output.append(self.network(self.possible_coordinate_tensor[i:i + self.batch_size]))
+                    output = torch.cat(output)
+                    output = output.reshape(self.moving_image.shape + (3,))
+                # self.moving_image = transformed_image.detach()
+                    self.estimated_dvf = self.estimated_dvf + output
 
         # Store the value of the total loss
         if self.verbose:
