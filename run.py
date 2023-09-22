@@ -8,6 +8,8 @@ import time
 import argparse
 import os
 from shutil import copyfile
+import torch.optim as optim
+
 
 project_dir = "/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion"
 
@@ -97,10 +99,11 @@ kwargs["batch_size"] = 10000
 # kwargs["voi"] = voi
 kwargs["loss_function"] = 'ncc'
 # checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230910_232109"]
-checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230916_180324"]
+checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230921_142043"]
 if args.mode == "finetune":
     kwargs["checkpoint"] = f"/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/liver_motion/{checkpoints[args.case_id]}/network.pt"
-    kwargs["loss_function"] = 'mse'
+    # kwargs["loss_function"] = 'mse'
+    kwargs["loss_function"] = 'ncc'
     kwargs["hyper_regularization"] = False
     kwargs["jacobian_regularization"] = False
     kwargs["bending_regularization"] = False
@@ -117,12 +120,13 @@ if args.mode == "finetune":
                                         image_series_data[0][-1], **kwargs)
     for i in range(len(image_series_data)):
         # ImpReg.moving_image = image_series_data[i][0].cuda()
-        ImpReg.fixed_image = image_series_data[i][1].cuda()
+        ImpReg.fixed_image = image_series_data[i][0].cuda()
         ImpReg.dvf = image_series_data[i][2]
         ImpReg.vois = image_series_data[i][3]
         ImpReg.voxel_size = image_series_data[i][-1]
         ImpReg.mask = image_series_data[i][-2]
         ImpReg.fixed_state = fixed_states[i]
+        # ImpReg.optimizer = optim.Adam(ImpReg.network.parameters(), lr=args.finetune_lr)
         ImpReg.fit(mode='finetune', n_proj=args.n_proj)
 else:
     ImpReg = models.ImplicitRegistrator(img_exp, img_insp, dvf, vois, voxel_size, **kwargs)

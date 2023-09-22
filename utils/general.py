@@ -137,7 +137,7 @@ def load_image_DIRLab(variation=1, folder=r"D:\Data\DIRLAB\Case", mode='train'):
 
 
 def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_patients", mode='train',
-                            train_moving_state=37, train_fixed_state=39, finetune_moving_state=57,
+                            train_moving_state=31, train_fixed_state=33, finetune_moving_state=57,
                             finetune_fixed_state=59):
     patients = ["ARENDS_WILLIAM_100448365_2017NOV29_131132_EOVIST",
                 "MURTON_ROBERT_18051141_2018MAY31_113605_EOVIST",
@@ -268,8 +268,8 @@ def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_pa
 
 def load_image_series_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_patients", mode='train'):
     # moving_states = [i for i in range(39, 71, 2)]
-    moving_states = [39] * 16
-    fixed_states = [i for i in range(41, 73, 2)]
+    moving_states = [31] * 20
+    fixed_states = [i for i in range(33, 73, 2)]
     image_series_data = []
     for i in range(len(moving_states)):
         image_series_data.append(load_image_liver_motion(variation=variation,

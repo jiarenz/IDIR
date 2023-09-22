@@ -433,7 +433,7 @@ class ImplicitRegistrator:
                 rotated_fixed_image = rotated_fixed_image.view(-1)
                 # Compute the loss
                 loss += self.criterion(rotated_transformed_image, rotated_fixed_image)
-
+            loss = loss / n_proj
         # Store the value of the data loss
         if self.verbose:
             self.data_loss_list[epoch] = loss.detach().cpu().numpy()
@@ -457,7 +457,7 @@ class ImplicitRegistrator:
 
         # print(f"epoch: {epoch}, loss: {loss}")
         torch.save(self.network.state_dict(), self.save_folder + '/network.pt')
-        if (epoch % 10 == 0 and mode == 'train') or (epoch % 10 == 0 and mode == 'finetune'):
+        if (((epoch + 1) % 10 == 0 or epoch + 1 == 1) and mode == 'train') or (((epoch + 1) % 10 == 0 or epoch + 1 == 1) and mode == 'finetune'):
             end_time = time.time()
             time_elapsed = end_time - self.start_time
             with torch.no_grad():
