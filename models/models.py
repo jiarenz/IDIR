@@ -290,7 +290,7 @@ class ImplicitRegistrator:
         self.args["lr"] = 0.00001
         self.args["finetune_lr"] = 1e-5
         self.args["batch_size"] = 10000
-        self.args["finetune_batch_size"] = 50000
+        self.args["finetune_batch_size"] = 10000
         self.args["layers"] = [3, 256, 256, 256, 3]
         self.args["velocity_steps"] = 1
 
@@ -372,7 +372,9 @@ class ImplicitRegistrator:
             # coordinate_tensor = general.rotate_coordinates(theta, coordinate_tensor)
             output = []
             for i in range(0, coordinate_tensor.shape[0], self.finetune_batch_size):
-                output.append(checkpoint(self.network, coordinate_tensor[i:i + self.finetune_batch_size]))
+                output.append(checkpoint(self.network,
+                                         coordinate_tensor[i:i + self.finetune_batch_size],
+                                         use_reentrant=False))
             output = torch.cat(output)  # (nx*ny*nz, 3)
             # indices = torch.randperm(
             #     self.possible_coordinate_tensor.shape[0], device="cuda"
@@ -381,7 +383,7 @@ class ImplicitRegistrator:
             # coordinate_tensor = coordinate_tensor.requires_grad_(True)
             # output = self.network(coordinate_tensor)
             coord_temp = torch.add(output + self.estimated_dvf.reshape(-1, 3), coordinate_tensor)
-            output = coord_temp
+            output = output + coordinate_tensor
             # torch.cuda.empty_cache()
             transformed_image = self.transform_no_add(coord_temp)   # (nx*ny*nz)
             # fixed_image = general.fast_trilinear_interpolation(
@@ -396,39 +398,8 @@ class ImplicitRegistrator:
             for i in range(n_proj):
                 theta_list.append(torch.tensor(111.25 / 180 * torch.pi * i).to(transformed_image))
             for theta in theta_list:
-                rotated_possible_coordinates = general.rotate_coordinates(theta, self.possible_coordinate_tensor)
-                rotated_fixed_image = general.fast_trilinear_interpolation(
-                    self.fixed_image,
-                    rotated_possible_coordinates[:, 0],
-                    rotated_possible_coordinates[:, 1],
-                    rotated_possible_coordinates[:, 2],
-                )
-                rotated_transformed_image = general.fast_trilinear_interpolation(
-                    transformed_image,
-                    rotated_possible_coordinates[:, 0],
-                    rotated_possible_coordinates[:, 1],
-                    rotated_possible_coordinates[:, 2],
-                )
-                # rotated_fixed_image = rotated_fixed_image.reshape(self.moving_image.shape)
-                # rotated_transformed_image = rotated_transformed_image.reshape(self.moving_image.shape)
-                rotated_fixed_image = torch.mean(rotated_fixed_image.reshape(self.moving_image.shape),
-                                                 dim=1, keepdim=True)  # (nx, 1, nz)
-                rotated_transformed_image = torch.mean(rotated_transformed_image.reshape(self.moving_image.shape),
-                                                 dim=1, keepdim=True)  # (nx, 1, nz)
-                # reverse_rotated_possible_coordinates = general.rotate_coordinates(-theta, self.possible_coordinate_tensor)
-                # rotated_fixed_image = general.fast_trilinear_interpolation(
-                #     rotated_fixed_image,
-                #     reverse_rotated_possible_coordinates[:, 0],
-                #     reverse_rotated_possible_coordinates[:, 1],
-                #     reverse_rotated_possible_coordinates[:, 2],
-                # )
-                # rotated_fixed_image = rotated_fixed_image.reshape(self.moving_image.shape)
-                # fixed_image = general.fast_trilinear_interpolation(
-                #     rotated_fixed_image,
-                #     coordinate_tensor[:, 0],
-                #     coordinate_tensor[:, 1],
-                #     coordinate_tensor[:, 2],
-                # )
+                rotated_fixed_image = checkpoint(self.generate_proj, theta, self.fixed_image, use_reentrant=False)
+                rotated_transformed_image = checkpoint(self.generate_proj, theta, transformed_image, use_reentrant=False)
                 rotated_transformed_image = rotated_transformed_image.view(-1)
                 rotated_fixed_image = rotated_fixed_image.view(-1)
                 # Compute the loss
@@ -451,9 +422,19 @@ class ImplicitRegistrator:
                 coordinate_tensor, output_rel, batch_size=self.batch_size
             )
         if self.bending_regularization:
-            loss += self.alpha_bending * regularizers.compute_bending_energy(
-                coordinate_tensor, output_rel, batch_size=self.batch_size
-            )
+            if mode == 'finetune':
+                for i in range(0, coordinate_tensor.shape[0], self.finetune_batch_size):
+                    loss += self.alpha_bending * checkpoint(regularizers.compute_bending_energy,
+                        coordinate_tensor[i:i + self.finetune_batch_size],
+                        output_rel[i:i + self.finetune_batch_size],
+                        batch_size=self.finetune_batch_size, use_reentrant=False
+                    )
+            elif mode == 'train':
+                loss += self.alpha_bending * regularizers.compute_bending_energy(
+                    coordinate_tensor, output_rel, batch_size=self.batch_size
+                )
+            else:
+                print("Not accepting mode other than finetune or train!")
 
         # print(f"epoch: {epoch}, loss: {loss}")
         torch.save(self.network.state_dict(), self.save_folder + '/network.pt')
@@ -572,6 +553,21 @@ class ImplicitRegistrator:
         # Store the value of the total loss
         if self.verbose:
             self.loss_list[epoch] = loss.detach().cpu().numpy()
+
+    def generate_proj(self, theta, image):
+        """Transform moving image given a transformation."""
+        rotated_possible_coordinates = general.rotate_coordinates(theta, self.possible_coordinate_tensor)
+        rotated_image = general.fast_trilinear_interpolation(
+            image,
+            rotated_possible_coordinates[:, 0],
+            rotated_possible_coordinates[:, 1],
+            rotated_possible_coordinates[:, 2],
+        )
+        # rotated_fixed_image = rotated_fixed_image.reshape(self.moving_image.shape)
+        # rotated_transformed_image = rotated_transformed_image.reshape(self.moving_image.shape)
+        rotated_image = torch.sum(rotated_image.reshape(image.shape),
+                                         dim=1, keepdim=True)  # (nx, 1, nz)
+        return rotated_image
 
     def transform(
         self, transformation, coordinate_tensor=None, moving_image=None, reshape=False

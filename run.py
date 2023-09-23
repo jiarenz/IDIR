@@ -18,10 +18,13 @@ parser_main.add_argument('--dataset', type=str, help='Choose which dataset for t
 parser_main.add_argument('--case_id', type=int, default=0, help='Choose which case for training')
 parser_main.add_argument('--mode', type=str, default="train", help='Whether to train from scratch or finetune '
                                                                    'an existing model')
-parser_main.add_argument('--n_proj', type=int, default=1, help='Number of projecitions for finetuning')
+parser_main.add_argument('--n_proj', type=int, default=10, help='Number of projecitions for finetuning')
 parser_main.add_argument('--finetune_lr', type=float, default=1e-5, help='Learning rate for finetuning')
 parser_main.add_argument('--n_epoch_train', type=int, default=2500, help='number of training epochs')
 parser_main.add_argument('--n_epoch_finetune', type=int, default=200, help='number of finetuning epochs')
+parser_main.add_argument('--loss', type=str, default="ncc", help='Choose loss function')
+parser_main.add_argument('--train_moving_state', type=int, default=31, help='The moving state in the pretraining stage')
+parser_main.add_argument('--train_fixed_state', type=int, default=33, help='The fixed state in the pretraining stage')
 args = parser_main.parse_args()
 
 start_run_at = time.strftime("%Y%m%d_%H%M%S", time.localtime())
@@ -82,7 +85,9 @@ elif args.dataset == "liver_motion":
             landmarks_exp,
             mask_exp,
             voxel_size,
-        ) = general.load_image_liver_motion(args.case_id, f"{data_dir}", mode=args.mode)
+        ) = general.load_image_liver_motion(args.case_id, f"{data_dir}", mode=args.mode,
+                                            train_moving_state=args.train_moving_state,
+                                            train_fixed_state=args.train_fixed_state)
     else:
         image_series_data, fixed_states = general.load_image_series_liver_motion(args.case_id, f"{data_dir}", mode=args.mode)
         mask_exp = image_series_data[0][-2]
@@ -90,20 +95,20 @@ kwargs = {}
 kwargs["verbose"] = True
 kwargs["hyper_regularization"] = False
 kwargs["jacobian_regularization"] = False
-kwargs["bending_regularization"] = True
+kwargs["bending_regularization"] = False
 kwargs["alpha_bending"] = 100
 kwargs["network_type"] = "SIREN"  # Options are "MLP" and "SIREN"
 kwargs["save_folder"] = save_folder
 kwargs["mask"] = mask_exp
 kwargs["batch_size"] = 10000
 # kwargs["voi"] = voi
-kwargs["loss_function"] = 'ncc'
+kwargs["loss_function"] = args.loss
 # checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230910_232109"]
 checkpoints = ["training_0_20230907_231958", "training_1_20230908_000700", "training_2_20230921_142043"]
 if args.mode == "finetune":
     kwargs["checkpoint"] = f"/RadOnc-MRI1/Student_Folder/jiarenz/projects/NeRP_motion/data/liver_motion/{checkpoints[args.case_id]}/network.pt"
     # kwargs["loss_function"] = 'mse'
-    kwargs["loss_function"] = 'ncc'
+    kwargs["loss_function"] = args.loss
     kwargs["hyper_regularization"] = False
     kwargs["jacobian_regularization"] = False
     kwargs["bending_regularization"] = False

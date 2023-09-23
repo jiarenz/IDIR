@@ -237,6 +237,7 @@ def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_pa
         mask = fixed_image > np.max(fixed_image) / 150
     elif mode == "train":
         mask = fixed_image > np.max(fixed_image) / 150
+        # mask = np.ones_like(fixed_image).astype(bool)
     # for i in range(fixed_image.shape[0]):
     #     for j in range(fixed_image.shape[1]):
     #         for k in range(fixed_image.shape[2]):
@@ -268,8 +269,10 @@ def load_image_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_pa
 
 def load_image_series_liver_motion(variation=1, folder="/mnt/ibrixfs04-Kspace/motion_patients", mode='train'):
     # moving_states = [i for i in range(39, 71, 2)]
-    moving_states = [31] * 20
-    fixed_states = [i for i in range(33, 73, 2)]
+    # moving_states = [31] * 20
+    # fixed_states = [i for i in range(33, 73, 2)]
+    moving_states = [31]
+    fixed_states = [71]
     image_series_data = []
     for i in range(len(moving_states)):
         image_series_data.append(load_image_liver_motion(variation=variation,
